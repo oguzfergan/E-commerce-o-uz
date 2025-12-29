@@ -1,352 +1,1287 @@
-import java.awt.*;
-import java.sql.*;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.sql.*;
+import java.text.DecimalFormat;
 
 public class CustomerDashboard extends JFrame {
-    private User currentUser; // User nesnesi
+    private User currentUser;
     private JTabbedPane tabbedPane;
-    private JTable tableProducts, tableCart, tableHistory;
-    private DefaultTableModel modelProducts, modelCart, modelHistory;
+    private DefaultTableModel modelProducts, modelCart, modelHistory, modelAddresses;
+    private JTable tableProducts, tableCart, tableHistory, tableAddresses;
     private JLabel lblCartTotal;
-    private JTextField txtCouponCode;
+    private JComboBox<String> cmbCategories;
+    private JTextField txtSearch, txtMinPrice, txtMaxPrice;
+    private int selectedCatalogId = -1;
 
     public CustomerDashboard(User user) {
         this.currentUser = user;
-        setTitle("Customer Dashboard - " + user.getFullName());
-        setSize(1000, 700);
+        setTitle("Customer Dashboard - " + user.getName());
+        setSize(1200, 800);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
         tabbedPane = new JTabbedPane();
-
-        tabbedPane.addTab("Products & Catalog", createProductsPanel());
-        tabbedPane.addTab("My Cart & Checkout", createCartPanel());
+        tabbedPane.addTab("Browse Catalogs", createBrowseCatalogsPanel());
+        tabbedPane.addTab("Shopping Cart", createCartPanel());
         tabbedPane.addTab("Order History", createHistoryPanel());
-        tabbedPane.addTab("My Statistics", createStatsPanel());
+        tabbedPane.addTab("My Reviews", createReviewsPanel());
+        tabbedPane.addTab("Statistics", createStatsPanel());
+        tabbedPane.addTab("Addresses", createAddressesPanel());
 
         add(tabbedPane);
 
         tabbedPane.addChangeListener(e -> {
             int index = tabbedPane.getSelectedIndex();
-            if (index == 0) loadProducts();
-            else if (index == 1) loadCart();
+            if (index == 1) loadCart();
             else if (index == 2) loadOrderHistory();
-            else if (index == 3) updateStats((JPanel) tabbedPane.getComponentAt(3));
+            else if (index == 3) loadReviewableItems();
+            else if (index == 4) updateStats();
+            else if (index == 5) loadAddresses();
         });
-
-        loadProducts();
     }
 
-    private JPanel createProductsPanel() {
+    // Browse Catalogs Panel
+    private JPanel createBrowseCatalogsPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-    
-        String[] columns = {"ID", "Product Name", "Category", "Price", "Stock", "Seller"};
+
+        // Top panel: Catalog selection
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        topPanel.add(new JLabel("Select Seller Catalog:"));
+        JComboBox<String> cmbCatalogs = new JComboBox<>();
+        loadCatalogs(cmbCatalogs);
+        cmbCatalogs.addActionListener(e -> {
+            String selected = (String) cmbCatalogs.getSelectedItem();
+            if (selected != null && !selected.equals("-- Select Catalog --")) {
+                String[] parts = selected.split(" - ");
+                selectedCatalogId = Integer.parseInt(parts[0]);
+                loadProducts();
+            }
+        });
+        topPanel.add(cmbCatalogs);
+
+        // Search and filter panel
+        JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        filterPanel.add(new JLabel("Search:"));
+        txtSearch = new JTextField(15);
+        filterPanel.add(txtSearch);
+
+        filterPanel.add(new JLabel("Category:"));
+        cmbCategories = new JComboBox<>();
+        cmbCategories.addItem("All");
+        loadCategories();
+        filterPanel.add(cmbCategories);
+
+        filterPanel.add(new JLabel("Price Range:"));
+        txtMinPrice = new JTextField(8);
+        txtMaxPrice = new JTextField(8);
+        filterPanel.add(new JLabel("Min:"));
+        filterPanel.add(txtMinPrice);
+        filterPanel.add(new JLabel("Max:"));
+        filterPanel.add(txtMaxPrice);
+
+        JButton btnFilter = new JButton("Apply Filters");
+        btnFilter.addActionListener(e -> loadProducts());
+        filterPanel.add(btnFilter);
+
+        JPanel northPanel = new JPanel(new BorderLayout());
+        northPanel.add(topPanel, BorderLayout.NORTH);
+        northPanel.add(filterPanel, BorderLayout.SOUTH);
+        panel.add(northPanel, BorderLayout.NORTH);
+
+        // Products table
+        String[] columns = {"Product ID", "Name", "Category", "Price", "Stock", "Avg Rating", "Reviews"};
         modelProducts = new DefaultTableModel(columns, 0) {
-            @Override public boolean isCellEditable(int row, int col) { return false; }
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return false;
+            }
         };
         tableProducts = new JTable(modelProducts);
-        // ID kolonunu gizle
         tableProducts.getColumnModel().getColumn(0).setMinWidth(0);
         tableProducts.getColumnModel().getColumn(0).setMaxWidth(0);
         tableProducts.getColumnModel().getColumn(0).setWidth(0);
-        
         panel.add(new JScrollPane(tableProducts), BorderLayout.CENTER);
 
-        JPanel btnPanel = new JPanel();
-        JButton btnAdd = new JButton("Add to Cart");
-        JButton btnRefresh = new JButton("Refresh List");
-        
-        btnRefresh.addActionListener(e -> loadProducts());
-        btnAdd.addActionListener(e -> addToCartAction());
-        
-        btnPanel.add(btnRefresh);
-        btnPanel.add(btnAdd);
+        // Buttons
+        JPanel btnPanel = new JPanel(new FlowLayout());
+        JButton btnViewDetails = new JButton("View Details");
+        JButton btnAddToCart = new JButton("Add to Cart");
+        btnPanel.add(btnViewDetails);
+        btnPanel.add(btnAddToCart);
+
+        btnViewDetails.addActionListener(e -> viewProductDetails());
+        btnAddToCart.addActionListener(e -> addToCart());
+
         panel.add(btnPanel, BorderLayout.SOUTH);
-        
+
         return panel;
+    }
+
+    private void loadCatalogs(JComboBox<String> cmb) {
+        cmb.removeAllItems();
+        cmb.addItem("-- Select Catalog --");
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "SELECT c.catalog_id, u.name FROM Catalogs c " +
+                        "JOIN Users u ON c.seller_id = u.user_id " +
+                        "ORDER BY u.name";
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery(sql);
+            while (rs.next()) {
+                cmb.addItem(rs.getInt("catalog_id") + " - " + rs.getString("name"));
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    private void loadCategories() {
+        cmbCategories.removeAllItems();
+        cmbCategories.addItem("All");
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "SELECT DISTINCT c.name FROM Categories c " +
+                        "JOIN Products p ON c.category_id = p.category_id " +
+                        "ORDER BY c.name";
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery(sql);
+            while (rs.next()) {
+                cmbCategories.addItem(rs.getString("name"));
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
     }
 
     private void loadProducts() {
         modelProducts.setRowCount(0);
+        if (selectedCatalogId == -1) return;
+
         try (Connection conn = DatabaseConnection.getConnection()) {
-            String sql = "SELECT * FROM vw_SellerProductCatalog WHERE IsActive = TRUE AND StockQuantity > 0";
-            Statement stmt = conn.createStatement();
-            ResultSet rs = stmt.executeQuery(sql);
-            while(rs.next()) {
+            String sql = "SELECT p.product_id, p.name, c.name as category_name, p.price, p.stock_quantity, " +
+                        "COALESCE(AVG(r.rating), 0) as avg_rating, COUNT(r.review_id) as review_count " +
+                        "FROM Products p " +
+                        "JOIN Categories c ON p.category_id = c.category_id " +
+                        "LEFT JOIN Reviews r ON p.product_id = r.product_id " +
+                        "WHERE p.catalog_id = ? ";
+
+            String search = txtSearch.getText().trim();
+            String category = (String) cmbCategories.getSelectedItem();
+            String minPrice = txtMinPrice.getText().trim();
+            String maxPrice = txtMaxPrice.getText().trim();
+
+            if (!search.isEmpty()) {
+                sql += "AND (p.name LIKE ? OR p.description LIKE ?) ";
+            }
+            if (category != null && !category.equals("All")) {
+                sql += "AND c.name = ? ";
+            }
+            if (!minPrice.isEmpty()) {
+                sql += "AND p.price >= ? ";
+            }
+            if (!maxPrice.isEmpty()) {
+                sql += "AND p.price <= ? ";
+            }
+
+            sql += "GROUP BY p.product_id, p.name, c.name, p.price, p.stock_quantity " +
+                   "ORDER BY p.name";
+
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            int paramIndex = 1;
+            pstmt.setInt(paramIndex++, selectedCatalogId);
+
+            if (!search.isEmpty()) {
+                String searchPattern = "%" + search + "%";
+                pstmt.setString(paramIndex++, searchPattern);
+                pstmt.setString(paramIndex++, searchPattern);
+            }
+            if (category != null && !category.equals("All")) {
+                pstmt.setString(paramIndex++, category);
+            }
+            if (!minPrice.isEmpty()) {
+                pstmt.setDouble(paramIndex++, Double.parseDouble(minPrice));
+            }
+            if (!maxPrice.isEmpty()) {
+                pstmt.setDouble(paramIndex++, Double.parseDouble(maxPrice));
+            }
+
+            ResultSet rs = pstmt.executeQuery();
+            DecimalFormat df = new DecimalFormat("#0.00");
+            while (rs.next()) {
                 modelProducts.addRow(new Object[]{
-                    rs.getInt("ProductID"),
-                    rs.getString("ProductName"),
-                    rs.getString("CategoryName"),
-                    rs.getBigDecimal("Price"),
-                    rs.getInt("StockQuantity"),
-                    rs.getString("SellerName")
+                    rs.getInt("product_id"),
+                    rs.getString("name"),
+                    rs.getString("category_name"),
+                    "$" + df.format(rs.getDouble("price")),
+                    rs.getInt("stock_quantity"),
+                    String.format("%.1f", rs.getDouble("avg_rating")),
+                    rs.getInt("review_count")
                 });
             }
-        } catch (SQLException ex) { ex.printStackTrace(); }
+        } catch (SQLException | NumberFormatException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error loading products: " + ex.getMessage());
+        }
     }
 
-    // --- KRİTİK DEĞİŞİKLİK: Çoklu Satıcı Desteği ile Sepete Ekleme ---
-    private void addToCartAction() {
+    private void viewProductDetails() {
         int row = tableProducts.getSelectedRow();
         if (row == -1) {
-            JOptionPane.showMessageDialog(this, "Select a product first.");
+            JOptionPane.showMessageDialog(this, "Please select a product first!");
             return;
         }
-        
-        int productId = (int) modelProducts.getValueAt(row, 0);
-        String qtyStr = JOptionPane.showInputDialog(this, "Enter Quantity:");
-        if (qtyStr == null) return;
-        
-        try {
-            int quantity = Integer.parseInt(qtyStr);
-            if (quantity <= 0) throw new NumberFormatException();
-            
-            try (Connection conn = DatabaseConnection.getConnection()) {
-                
-                // 1. Ürünün Satıcısını Bul
-                int sellerId = getSellerId(conn, productId);
-                
-                // 2. Bu müşteri için, BU SATICIYA ait açık (Pending) sipariş var mı?
-                int orderId = getPendingOrderIdForSeller(conn, currentUser.getId(), sellerId);
-                
-                if (orderId != -1) {
-                    // Varsa mevcut siparişe ekle
-                    addItemToOrder(conn, orderId, productId, quantity);
-                } else {
-                    // Yoksa, bu satıcı için YENİ sipariş oluştur
-                    int demoAddressId = 1; // Gerçek uygulamada kullanıcı seçmeli
-                    createOrderAndAddItem(conn, currentUser.getId(), sellerId, demoAddressId, productId, quantity);
+
+        int productId = (Integer) modelProducts.getValueAt(row, 0);
+        showProductDetailsDialog(productId);
+    }
+
+    private void showProductDetailsDialog(int productId) {
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "SELECT p.*, c.name as category_name, u.name as seller_name, " +
+                        "COALESCE(AVG(r.rating), 0) as avg_rating, COUNT(r.review_id) as review_count " +
+                        "FROM Products p " +
+                        "JOIN Categories c ON p.category_id = c.category_id " +
+                        "JOIN Catalogs cat ON p.catalog_id = cat.catalog_id " +
+                        "JOIN Users u ON cat.seller_id = u.user_id " +
+                        "LEFT JOIN Reviews r ON p.product_id = r.product_id " +
+                        "WHERE p.product_id = ? " +
+                        "GROUP BY p.product_id";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, productId);
+            ResultSet rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                JDialog dialog = new JDialog(this, "Product Details", true);
+                dialog.setSize(600, 500);
+                dialog.setLocationRelativeTo(this);
+
+                JPanel panel = new JPanel(new BorderLayout());
+                JTextArea details = new JTextArea();
+                details.setEditable(false);
+                details.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+                details.setText(
+                    "Product: " + rs.getString("name") + "\n\n" +
+                    "Category: " + rs.getString("category_name") + "\n" +
+                    "Seller: " + rs.getString("seller_name") + "\n" +
+                    "Price: $" + rs.getDouble("price") + "\n" +
+                    "Stock: " + rs.getInt("stock_quantity") + "\n" +
+                    "Average Rating: " + String.format("%.1f", rs.getDouble("avg_rating")) + " / 5.0\n" +
+                    "Total Reviews: " + rs.getInt("review_count") + "\n\n" +
+                    "Description:\n" + (rs.getString("description") != null ? rs.getString("description") : "No description available")
+                );
+                panel.add(new JScrollPane(details), BorderLayout.CENTER);
+
+                // Load reviews
+                String reviewsSql = "SELECT r.rating, r.comment, r.review_date, u.name as customer_name " +
+                                   "FROM Reviews r " +
+                                   "JOIN Users u ON r.customer_id = u.user_id " +
+                                   "WHERE r.product_id = ? " +
+                                   "ORDER BY r.review_date DESC";
+                PreparedStatement reviewsStmt = conn.prepareStatement(reviewsSql);
+                reviewsStmt.setInt(1, productId);
+                ResultSet reviewsRs = reviewsStmt.executeQuery();
+
+                JTextArea reviewsArea = new JTextArea();
+                reviewsArea.setEditable(false);
+                reviewsArea.append("\n\n--- Customer Reviews ---\n\n");
+                boolean hasReviews = false;
+                while (reviewsRs.next()) {
+                    hasReviews = true;
+                    reviewsArea.append("Rating: " + reviewsRs.getInt("rating") + "/5\n");
+                    reviewsArea.append("By: " + reviewsRs.getString("customer_name") + "\n");
+                    reviewsArea.append("Date: " + reviewsRs.getTimestamp("review_date") + "\n");
+                    if (reviewsRs.getString("comment") != null) {
+                        reviewsArea.append("Comment: " + reviewsRs.getString("comment") + "\n");
+                    }
+                    reviewsArea.append("---\n\n");
                 }
-                
-                JOptionPane.showMessageDialog(this, "Added to cart!");
+                if (!hasReviews) {
+                    reviewsArea.append("No reviews yet.\n");
+                }
+                panel.add(new JScrollPane(reviewsArea), BorderLayout.SOUTH);
+
+                JButton btnAddToCart = new JButton("Add to Cart");
+                btnAddToCart.addActionListener(e -> {
+                    addProductToCart(productId);
+                    dialog.dispose();
+                });
+                panel.add(btnAddToCart, BorderLayout.NORTH);
+
+                dialog.add(panel);
+                dialog.setVisible(true);
             }
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Invalid quantity.");
-        } catch (SQLException e) {
-            JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error loading product details: " + ex.getMessage());
         }
     }
 
-    private int getSellerId(Connection conn, int productId) throws SQLException {
-        String sql = "SELECT c.SellerID FROM Products p JOIN Catalogs c ON p.CatalogID = c.CatalogID WHERE p.ProductID = ?";
-        PreparedStatement pst = conn.prepareStatement(sql);
-        pst.setInt(1, productId);
-        ResultSet rs = pst.executeQuery();
-        return rs.next() ? rs.getInt(1) : -1;
+    private void addToCart() {
+        int row = tableProducts.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select a product first!");
+            return;
+        }
+
+        int productId = (Integer) modelProducts.getValueAt(row, 0);
+        addProductToCart(productId);
     }
 
-    // YENİ: Belirli bir satıcı için açık sipariş var mı?
-    private int getPendingOrderIdForSeller(Connection conn, int userId, int sellerId) throws SQLException {
-        String sql = "SELECT OrderID FROM Orders WHERE CustomerID = ? AND SellerID = ? AND OrderStatus = 'Pending'";
-        PreparedStatement pst = conn.prepareStatement(sql);
-        pst.setInt(1, userId);
-        pst.setInt(2, sellerId);
-        ResultSet rs = pst.executeQuery();
-        return rs.next() ? rs.getInt("OrderID") : -1;
+    private void addProductToCart(int productId) {
+        String qtyStr = JOptionPane.showInputDialog(this, "Enter quantity:");
+        if (qtyStr == null || qtyStr.trim().isEmpty()) return;
+
+        try {
+            int quantity = Integer.parseInt(qtyStr);
+            if (quantity <= 0) {
+                JOptionPane.showMessageDialog(this, "Quantity must be greater than 0!");
+                return;
+            }
+
+            try (Connection conn = DatabaseConnection.getConnection()) {
+                // Check stock
+                String stockSql = "SELECT stock_quantity FROM Products WHERE product_id = ?";
+                PreparedStatement stockStmt = conn.prepareStatement(stockSql);
+                stockStmt.setInt(1, productId);
+                ResultSet stockRs = stockStmt.executeQuery();
+                if (stockRs.next()) {
+                    int stock = stockRs.getInt("stock_quantity");
+                    if (stock < quantity) {
+                        JOptionPane.showMessageDialog(this, 
+                            "Insufficient stock! Available: " + stock, 
+                            "Stock Error", 
+                            JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                }
+
+                // Get seller_id for this product
+                String sellerSql = "SELECT c.seller_id FROM Products p " +
+                                  "JOIN Catalogs c ON p.catalog_id = c.catalog_id " +
+                                  "WHERE p.product_id = ?";
+                PreparedStatement sellerStmt = conn.prepareStatement(sellerSql);
+                sellerStmt.setInt(1, productId);
+                ResultSet sellerRs = sellerStmt.executeQuery();
+                if (!sellerRs.next()) {
+                    JOptionPane.showMessageDialog(this, "Error: Product not found!");
+                    return;
+                }
+                int productSellerId = sellerRs.getInt("seller_id");
+
+                // Check for existing ongoing order
+                String orderSql = "SELECT order_id, seller_id FROM Orders " +
+                                 "WHERE customer_id = ? AND status = 'ongoing'";
+                PreparedStatement orderStmt = conn.prepareStatement(orderSql);
+                orderStmt.setInt(1, currentUser.getUserId());
+                ResultSet orderRs = orderStmt.executeQuery();
+
+                int orderId;
+                if (orderRs.next()) {
+                    orderId = orderRs.getInt("order_id");
+                    int existingSellerId = orderRs.getInt("seller_id");
+                    
+                    // Business rule: Only one seller per order
+                    if (existingSellerId != productSellerId) {
+                        JOptionPane.showMessageDialog(this, 
+                            "You already have items from a different seller in your cart!\n" +
+                            "Please complete or cancel your current order first.", 
+                            "Cart Error", 
+                            JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                } else {
+                    // Create new ongoing order - need addresses
+                    String addressSql = "SELECT address_id FROM Addresses WHERE user_id = ? LIMIT 1";
+                    PreparedStatement addrStmt = conn.prepareStatement(addressSql);
+                    addrStmt.setInt(1, currentUser.getUserId());
+                    ResultSet addrRs = addrStmt.executeQuery();
+                    
+                    if (!addrRs.next()) {
+                        JOptionPane.showMessageDialog(this, 
+                            "Please add an address first in the Addresses tab!", 
+                            "Address Required", 
+                            JOptionPane.WARNING_MESSAGE);
+                        return;
+                    }
+                    
+                    int addressId = addrRs.getInt("address_id");
+                    
+                    // Create new ongoing order
+                    String createOrderSql = "INSERT INTO Orders (customer_id, seller_id, shipping_address_id, billing_address_id, status) " +
+                                          "VALUES (?, ?, ?, ?, 'ongoing')";
+                    PreparedStatement createStmt = conn.prepareStatement(createOrderSql, Statement.RETURN_GENERATED_KEYS);
+                    createStmt.setInt(1, currentUser.getUserId());
+                    createStmt.setInt(2, productSellerId);
+                    createStmt.setInt(3, addressId);
+                    createStmt.setInt(4, addressId);
+                    createStmt.executeUpdate();
+                    
+                    ResultSet generatedKeys = createStmt.getGeneratedKeys();
+                    if (generatedKeys.next()) {
+                        orderId = generatedKeys.getInt(1);
+                    } else {
+                        throw new SQLException("Failed to create order");
+                    }
+                }
+
+                // Get product price
+                String priceSql = "SELECT price FROM Products WHERE product_id = ?";
+                PreparedStatement priceStmt = conn.prepareStatement(priceSql);
+                priceStmt.setInt(1, productId);
+                ResultSet priceRs = priceStmt.executeQuery();
+                if (!priceRs.next()) {
+                    throw new SQLException("Product price not found");
+                }
+                double price = priceRs.getDouble("price");
+                double subtotal = price * quantity;
+
+                // Check if product already in cart
+                String checkSql = "SELECT order_item_id, quantity FROM Order_Items " +
+                                 "WHERE order_id = ? AND product_id = ?";
+                PreparedStatement checkStmt = conn.prepareStatement(checkSql);
+                checkStmt.setInt(1, orderId);
+                checkStmt.setInt(2, productId);
+                ResultSet checkRs = checkStmt.executeQuery();
+
+                if (checkRs.next()) {
+                    // Update existing item
+                    int existingQty = checkRs.getInt("quantity");
+                    int newQty = existingQty + quantity;
+                    double newSubtotal = price * newQty;
+                    
+                    String updateSql = "UPDATE Order_Items SET quantity = ?, subtotal = ? " +
+                                      "WHERE order_id = ? AND product_id = ?";
+                    PreparedStatement updateStmt = conn.prepareStatement(updateSql);
+                    updateStmt.setInt(1, newQty);
+                    updateStmt.setDouble(2, newSubtotal);
+                    updateStmt.setInt(3, orderId);
+                    updateStmt.setInt(4, productId);
+                    updateStmt.executeUpdate();
+                } else {
+                    // Insert new item
+                    String insertSql = "INSERT INTO Order_Items (order_id, product_id, quantity, price_at_purchase, subtotal) " +
+                                     "VALUES (?, ?, ?, ?, ?)";
+                    PreparedStatement insertStmt = conn.prepareStatement(insertSql);
+                    insertStmt.setInt(1, orderId);
+                    insertStmt.setInt(2, productId);
+                    insertStmt.setInt(3, quantity);
+                    insertStmt.setDouble(4, price);
+                    insertStmt.setDouble(5, subtotal);
+                    insertStmt.executeUpdate();
+                }
+
+                // Update order total
+                String totalSql = "UPDATE Orders SET total_amount = " +
+                                 "(SELECT COALESCE(SUM(subtotal), 0) FROM Order_Items WHERE order_id = ?) " +
+                                 "WHERE order_id = ?";
+                PreparedStatement totalStmt = conn.prepareStatement(totalSql);
+                totalStmt.setInt(1, orderId);
+                totalStmt.setInt(2, orderId);
+                totalStmt.executeUpdate();
+
+                JOptionPane.showMessageDialog(this, "Product added to cart successfully!");
+                loadCart();
+            }
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "Invalid quantity!");
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error adding to cart: " + ex.getMessage());
+        }
     }
 
-    private void addItemToOrder(Connection conn, int orderId, int productId, int quantity) throws SQLException {
-        CallableStatement cstmtItem = conn.prepareCall("{call sp_AddOrderItem(?, ?, ?)}");
-        cstmtItem.setInt(1, orderId);
-        cstmtItem.setInt(2, productId);
-        cstmtItem.setInt(3, quantity);
-        cstmtItem.execute();
-    }
-
-    private void createOrderAndAddItem(Connection conn, int userId, int sellerId, int addressId, int productId, int qty) throws SQLException {
-        CallableStatement cstmt = conn.prepareCall("{call sp_PlaceOrder(?, ?, ?, ?, ?)}");
-        cstmt.setInt(1, userId);
-        cstmt.setInt(2, sellerId);
-        cstmt.setInt(3, addressId);
-        cstmt.setInt(4, addressId);
-        cstmt.registerOutParameter(5, Types.INTEGER);
-        cstmt.execute();
-        int newOrderId = cstmt.getInt(5);
-        
-        addItemToOrder(conn, newOrderId, productId, qty);
-    }
-    // -----------------------------------------------------------------
-
+    // Shopping Cart Panel
     private JPanel createCartPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        
-        String[] columns = {"Product (Seller)", "Quantity", "Unit Price", "Subtotal"};
-        modelCart = new DefaultTableModel(columns, 0);
+
+        String[] columns = {"Product", "Quantity", "Unit Price", "Subtotal"};
+        modelCart = new DefaultTableModel(columns, 0) {
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return col == 1; // Only quantity is editable
+            }
+        };
         tableCart = new JTable(modelCart);
         panel.add(new JScrollPane(tableCart), BorderLayout.CENTER);
-        
-        JPanel bottomPanel = new JPanel(new GridLayout(3, 1));
-        
-        JPanel pnlCoupon = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        pnlCoupon.add(new JLabel("Coupon Code:"));
-        txtCouponCode = new JTextField(10);
-        pnlCoupon.add(txtCouponCode);
-        JButton btnApply = new JButton("Apply Coupon");
-        pnlCoupon.add(btnApply);
-        
-        lblCartTotal = new JLabel("Total: 0.00");
-        lblCartTotal.setFont(new Font("Arial", Font.BOLD, 14));
-        
-        JButton btnPay = new JButton("Checkout / Pay All Pending Orders");
-        
-        bottomPanel.add(pnlCoupon);
-        bottomPanel.add(lblCartTotal);
-        bottomPanel.add(btnPay);
+
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        lblCartTotal = new JLabel("Total: $0.00");
+        lblCartTotal.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 16));
+        bottomPanel.add(lblCartTotal, BorderLayout.CENTER);
+
+        JPanel btnPanel = new JPanel(new FlowLayout());
+        JButton btnRemove = new JButton("Remove Item");
+        JButton btnUpdateQty = new JButton("Update Quantity");
+        JButton btnSubmit = new JButton("Submit Order");
+        btnPanel.add(btnRemove);
+        btnPanel.add(btnUpdateQty);
+        btnPanel.add(btnSubmit);
+
+        btnRemove.addActionListener(e -> removeFromCart());
+        btnUpdateQty.addActionListener(e -> updateQuantity());
+        btnSubmit.addActionListener(e -> submitOrder());
+
+        bottomPanel.add(btnPanel, BorderLayout.SOUTH);
         panel.add(bottomPanel, BorderLayout.SOUTH);
-        
-        btnApply.addActionListener(e -> applyCouponAction());
-        btnPay.addActionListener(e -> payAction());
-        
+
         return panel;
     }
 
     private void loadCart() {
         modelCart.setRowCount(0);
-        lblCartTotal.setText("Total: 0.00");
-        double grandTotal = 0;
+        double total = 0.0;
 
         try (Connection conn = DatabaseConnection.getConnection()) {
-            // Tüm Pending siparişlerin içeriğini çek (Farklı satıcılardan olabilir)
-            String sql = "SELECT p.ProductName, oi.Quantity, oi.UnitPrice, oi.Subtotal, u.FirstName as SellerName " +
-                         "FROM OrderItems oi " +
-                         "JOIN Products p ON oi.ProductID = p.ProductID " +
-                         "JOIN Orders o ON oi.OrderID = o.OrderID " +
-                         "JOIN Users u ON o.SellerID = u.UserID " +
-                         "WHERE o.CustomerID = ? AND o.OrderStatus = 'Pending'";
-                         
-            PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, currentUser.getId());
-            ResultSet rs = pst.executeQuery();
-            
-            while(rs.next()) {
+            String sql = "SELECT oi.order_item_id, p.name, oi.quantity, oi.price_at_purchase, oi.subtotal " +
+                        "FROM Order_Items oi " +
+                        "JOIN Products p ON oi.product_id = p.product_id " +
+                        "JOIN Orders o ON oi.order_id = o.order_id " +
+                        "WHERE o.customer_id = ? AND o.status = 'ongoing' " +
+                        "ORDER BY oi.order_item_id";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, currentUser.getUserId());
+            ResultSet rs = pstmt.executeQuery();
+
+            DecimalFormat df = new DecimalFormat("#0.00");
+            while (rs.next()) {
                 modelCart.addRow(new Object[]{
-                    rs.getString("ProductName") + " (" + rs.getString("SellerName") + ")", 
-                    rs.getInt("Quantity"), 
-                    rs.getDouble("UnitPrice"), 
-                    rs.getDouble("Subtotal")
+                    rs.getString("name"),
+                    rs.getInt("quantity"),
+                    "$" + df.format(rs.getDouble("price_at_purchase")),
+                    "$" + df.format(rs.getDouble("subtotal"))
                 });
-                grandTotal += rs.getDouble("Subtotal");
+                total += rs.getDouble("subtotal");
             }
-            
-            lblCartTotal.setText(String.format("Cart Total: %.2f TL", grandTotal));
-            
-        } catch (SQLException ex) { ex.printStackTrace(); }
+
+            lblCartTotal.setText("Total: $" + df.format(total));
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
     }
 
-    private void applyCouponAction() {
-        // Not: Kupon mantığı her siparişe ayrı uygulanmalı, demo için ilk bulduğu siparişe uyguluyor
+    private void removeFromCart() {
+        int row = tableCart.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an item to remove!");
+            return;
+        }
+
         try (Connection conn = DatabaseConnection.getConnection()) {
-            int orderId = getFirstPendingOrderId(conn);
-            if (orderId == -1) { JOptionPane.showMessageDialog(this, "Empty Cart"); return; }
-            
-            CallableStatement cstmt = conn.prepareCall("{call sp_ApplyCoupon(?, ?, ?, ?, ?)}");
-            cstmt.setInt(1, orderId);
-            cstmt.setString(2, txtCouponCode.getText().trim());
-            cstmt.registerOutParameter(3, Types.BOOLEAN);
-            cstmt.registerOutParameter(4, Types.VARCHAR);
-            cstmt.registerOutParameter(5, Types.DECIMAL);
-            cstmt.execute();
-            
-            JOptionPane.showMessageDialog(this, cstmt.getString(4));
-            if (cstmt.getBoolean(3)) loadCart();
-            
-        } catch (SQLException ex) { ex.printStackTrace(); }
+            // Get order_item_id
+            String sql = "SELECT oi.order_item_id, oi.order_id " +
+                        "FROM Order_Items oi " +
+                        "JOIN Orders o ON oi.order_id = o.order_id " +
+                        "WHERE o.customer_id = ? AND o.status = 'ongoing' " +
+                        "LIMIT 1 OFFSET ?";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, currentUser.getUserId());
+            pstmt.setInt(2, row);
+            ResultSet rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                int orderItemId = rs.getInt("order_item_id");
+                int orderId = rs.getInt("order_id");
+
+                String deleteSql = "DELETE FROM Order_Items WHERE order_item_id = ?";
+                PreparedStatement deleteStmt = conn.prepareStatement(deleteSql);
+                deleteStmt.setInt(1, orderItemId);
+                deleteStmt.executeUpdate();
+
+                // Update order total
+                String totalSql = "UPDATE Orders SET total_amount = " +
+                                 "(SELECT COALESCE(SUM(subtotal), 0) FROM Order_Items WHERE order_id = ?) " +
+                                 "WHERE order_id = ?";
+                PreparedStatement totalStmt = conn.prepareStatement(totalSql);
+                totalStmt.setInt(1, orderId);
+                totalStmt.setInt(2, orderId);
+                totalStmt.executeUpdate();
+
+                loadCart();
+                JOptionPane.showMessageDialog(this, "Item removed from cart!");
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error removing item: " + ex.getMessage());
+        }
     }
 
-    private void payAction() {
-        try (Connection conn = DatabaseConnection.getConnection()) {
-            // Ödeme işlemi demo için basitleştirildi: İlk bulunan açık siparişi öder.
-            // Gerçekte tüm pending siparişleri döngüyle ödemek gerekebilir.
-            int orderId = getFirstPendingOrderId(conn);
-            if (orderId == -1) {
-                JOptionPane.showMessageDialog(this, "No pending orders found.");
+    private void updateQuantity() {
+        int row = tableCart.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an item to update!");
+            return;
+        }
+
+        String qtyStr = JOptionPane.showInputDialog(this, "Enter new quantity:");
+        if (qtyStr == null || qtyStr.trim().isEmpty()) return;
+
+        try {
+            int newQty = Integer.parseInt(qtyStr);
+            if (newQty <= 0) {
+                JOptionPane.showMessageDialog(this, "Quantity must be greater than 0!");
                 return;
             }
-            
-            String sqlT = "SELECT TotalAmount FROM Orders WHERE OrderID = ?";
-            PreparedStatement pst = conn.prepareStatement(sqlT);
-            pst.setInt(1, orderId);
-            ResultSet rs = pst.executeQuery();
-            double amount = 0;
-            if (rs.next()) amount = rs.getDouble(1);
-            
-            CallableStatement cstmt = conn.prepareCall("{call sp_ProcessPayment(?, ?, ?, ?)}");
-            cstmt.setInt(1, orderId);
-            cstmt.setString(2, "Credit Card");
-            cstmt.setDouble(3, amount);
-            cstmt.setString(4, "TXN-" + System.currentTimeMillis());
-            cstmt.execute();
-            
-            JOptionPane.showMessageDialog(this, "Payment Successful for Order #" + orderId);
-            loadCart(); // Ödenen sipariş listeden kalkar (Status Confirmed olur)
-            
-        } catch (SQLException ex) { JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage()); }
+
+            try (Connection conn = DatabaseConnection.getConnection()) {
+                // Get order_item details
+                String sql = "SELECT oi.order_item_id, oi.order_id, oi.product_id, oi.price_at_purchase " +
+                            "FROM Order_Items oi " +
+                            "JOIN Orders o ON oi.order_id = o.order_id " +
+                            "WHERE o.customer_id = ? AND o.status = 'ongoing' " +
+                            "LIMIT 1 OFFSET ?";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setInt(1, currentUser.getUserId());
+                pstmt.setInt(2, row);
+                ResultSet rs = pstmt.executeQuery();
+
+                if (rs.next()) {
+                    int orderItemId = rs.getInt("order_item_id");
+                    int orderId = rs.getInt("order_id");
+                    int productId = rs.getInt("product_id");
+                    double price = rs.getDouble("price_at_purchase");
+
+                    // Check stock
+                    String stockSql = "SELECT stock_quantity FROM Products WHERE product_id = ?";
+                    PreparedStatement stockStmt = conn.prepareStatement(stockSql);
+                    stockStmt.setInt(1, productId);
+                    ResultSet stockRs = stockStmt.executeQuery();
+                    if (stockRs.next()) {
+                        int stock = stockRs.getInt("stock_quantity");
+                        if (stock < newQty) {
+                            JOptionPane.showMessageDialog(this, 
+                                "Insufficient stock! Available: " + stock, 
+                                "Stock Error", 
+                                JOptionPane.ERROR_MESSAGE);
+                            return;
+                        }
+                    }
+
+                    double newSubtotal = price * newQty;
+                    String updateSql = "UPDATE Order_Items SET quantity = ?, subtotal = ? WHERE order_item_id = ?";
+                    PreparedStatement updateStmt = conn.prepareStatement(updateSql);
+                    updateStmt.setInt(1, newQty);
+                    updateStmt.setDouble(2, newSubtotal);
+                    updateStmt.setInt(3, orderItemId);
+                    updateStmt.executeUpdate();
+
+                    // Update order total
+                    String totalSql = "UPDATE Orders SET total_amount = " +
+                                     "(SELECT COALESCE(SUM(subtotal), 0) FROM Order_Items WHERE order_id = ?) " +
+                                     "WHERE order_id = ?";
+                    PreparedStatement totalStmt = conn.prepareStatement(totalSql);
+                    totalStmt.setInt(1, orderId);
+                    totalStmt.setInt(2, orderId);
+                    totalStmt.executeUpdate();
+
+                    loadCart();
+                    JOptionPane.showMessageDialog(this, "Quantity updated!");
+                }
+            }
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "Invalid quantity!");
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error updating quantity: " + ex.getMessage());
+        }
     }
 
-    private int getFirstPendingOrderId(Connection conn) throws SQLException {
-        String sql = "SELECT OrderID FROM Orders WHERE CustomerID = ? AND OrderStatus = 'Pending' LIMIT 1";
-        PreparedStatement pst = conn.prepareStatement(sql);
-        pst.setInt(1, currentUser.getId());
-        ResultSet rs = pst.executeQuery();
-        return rs.next() ? rs.getInt(1) : -1;
+    private void submitOrder() {
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            // Check if cart has items
+            String checkSql = "SELECT COUNT(*) as item_count FROM Order_Items oi " +
+                             "JOIN Orders o ON oi.order_id = o.order_id " +
+                             "WHERE o.customer_id = ? AND o.status = 'ongoing'";
+            PreparedStatement checkStmt = conn.prepareStatement(checkSql);
+            checkStmt.setInt(1, currentUser.getUserId());
+            ResultSet checkRs = checkStmt.executeQuery();
+            
+            if (!checkRs.next() || checkRs.getInt("item_count") == 0) {
+                JOptionPane.showMessageDialog(this, "Your cart is empty!");
+                return;
+            }
+
+            // Get order
+            String orderSql = "SELECT order_id, shipping_address_id, billing_address_id FROM Orders " +
+                            "WHERE customer_id = ? AND status = 'ongoing'";
+            PreparedStatement orderStmt = conn.prepareStatement(orderSql);
+            orderStmt.setInt(1, currentUser.getUserId());
+            ResultSet orderRs = orderStmt.executeQuery();
+
+            if (orderRs.next()) {
+                int orderId = orderRs.getInt("order_id");
+                int shippingAddrId = orderRs.getInt("shipping_address_id");
+                int billingAddrId = orderRs.getInt("billing_address_id");
+
+                // Show address selection dialog
+                AddressSelectionDialog dialog = new AddressSelectionDialog(this, conn, currentUser.getUserId(), 
+                                                                          shippingAddrId, billingAddrId);
+                dialog.setVisible(true);
+
+                if (dialog.isConfirmed()) {
+                    shippingAddrId = dialog.getShippingAddressId();
+                    billingAddrId = dialog.getBillingAddressId();
+
+                    // Update order addresses and status
+                    String updateSql = "UPDATE Orders SET shipping_address_id = ?, billing_address_id = ?, status = 'pending' " +
+                                      "WHERE order_id = ?";
+                    PreparedStatement updateStmt = conn.prepareStatement(updateSql);
+                    updateStmt.setInt(1, shippingAddrId);
+                    updateStmt.setInt(2, billingAddrId);
+                    updateStmt.setInt(3, orderId);
+                    updateStmt.executeUpdate();
+
+                    // Create payment record
+                    String totalSql = "SELECT total_amount FROM Orders WHERE order_id = ?";
+                    PreparedStatement totalStmt = conn.prepareStatement(totalSql);
+                    totalStmt.setInt(1, orderId);
+                    ResultSet totalRs = totalStmt.executeQuery();
+                    double totalAmount = 0.0;
+                    if (totalRs.next()) {
+                        totalAmount = totalRs.getDouble("total_amount");
+                    }
+
+                    String paymentSql = "INSERT INTO Payments (order_id, transaction_id, amount, method, status) " +
+                                      "VALUES (?, ?, ?, 'credit_card', 'pending')";
+                    PreparedStatement paymentStmt = conn.prepareStatement(paymentSql);
+                    paymentStmt.setInt(1, orderId);
+                    paymentStmt.setString(2, "TXN-" + System.currentTimeMillis());
+                    paymentStmt.setDouble(3, totalAmount);
+                    paymentStmt.executeUpdate();
+
+                    JOptionPane.showMessageDialog(this, 
+                        "Order submitted successfully! Order ID: " + orderId, 
+                        "Success", 
+                        JOptionPane.INFORMATION_MESSAGE);
+                    loadCart();
+                }
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error submitting order: " + ex.getMessage());
+        }
     }
 
+    // Order History Panel
     private JPanel createHistoryPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        modelHistory = new DefaultTableModel(new String[]{"Order ID", "Date", "Total", "Status"}, 0);
+
+        String[] columns = {"Order ID", "Date", "Seller", "Total", "Status"};
+        modelHistory = new DefaultTableModel(columns, 0) {
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return false;
+            }
+        };
         tableHistory = new JTable(modelHistory);
         panel.add(new JScrollPane(tableHistory), BorderLayout.CENTER);
+
+        JPanel btnPanel = new JPanel(new FlowLayout());
+        JButton btnViewDetails = new JButton("View Order Details");
+        JButton btnCancel = new JButton("Cancel Order");
+        btnPanel.add(btnViewDetails);
+        btnPanel.add(btnCancel);
+
+        btnViewDetails.addActionListener(e -> viewOrderDetails());
+        btnCancel.addActionListener(e -> cancelOrder());
+
+        panel.add(btnPanel, BorderLayout.SOUTH);
         return panel;
     }
-    
+
     private void loadOrderHistory() {
         modelHistory.setRowCount(0);
         try (Connection conn = DatabaseConnection.getConnection()) {
-            String sql = "SELECT OrderID, OrderDate, TotalAmount, OrderStatus FROM Orders WHERE CustomerID = ? ORDER BY OrderDate DESC";
-            PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, currentUser.getId());
-            ResultSet rs = pst.executeQuery();
-            while(rs.next()) {
+            String sql = "SELECT o.order_id, o.order_date, u.name as seller_name, o.total_amount, o.status " +
+                        "FROM Orders o " +
+                        "JOIN Users u ON o.seller_id = u.user_id " +
+                        "WHERE o.customer_id = ? AND o.status != 'ongoing' " +
+                        "ORDER BY o.order_date DESC";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, currentUser.getUserId());
+            ResultSet rs = pstmt.executeQuery();
+
+            DecimalFormat df = new DecimalFormat("#0.00");
+            while (rs.next()) {
                 modelHistory.addRow(new Object[]{
-                    rs.getInt("OrderID"), rs.getTimestamp("OrderDate"), rs.getDouble("TotalAmount"), rs.getString("OrderStatus")
+                    rs.getInt("order_id"),
+                    rs.getTimestamp("order_date"),
+                    rs.getString("seller_name"),
+                    "$" + df.format(rs.getDouble("total_amount")),
+                    rs.getString("status")
                 });
             }
-        } catch (SQLException ex) { ex.printStackTrace(); }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
     }
 
+    private void viewOrderDetails() {
+        int row = tableHistory.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an order first!");
+            return;
+        }
+
+        int orderId = (Integer) modelHistory.getValueAt(row, 0);
+        showOrderDetailsDialog(orderId);
+    }
+
+    private void showOrderDetailsDialog(int orderId) {
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "SELECT oi.product_id, p.name, oi.quantity, oi.price_at_purchase, oi.subtotal " +
+                        "FROM Order_Items oi " +
+                        "JOIN Products p ON oi.product_id = p.product_id " +
+                        "WHERE oi.order_id = ?";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, orderId);
+            ResultSet rs = pstmt.executeQuery();
+
+            JDialog dialog = new JDialog(this, "Order Details - Order #" + orderId, true);
+            dialog.setSize(600, 400);
+            dialog.setLocationRelativeTo(this);
+
+            DefaultTableModel model = new DefaultTableModel(
+                new String[]{"Product", "Quantity", "Unit Price", "Subtotal"}, 0
+            );
+            JTable table = new JTable(model);
+            DecimalFormat df = new DecimalFormat("#0.00");
+            double total = 0.0;
+
+            while (rs.next()) {
+                model.addRow(new Object[]{
+                    rs.getString("name"),
+                    rs.getInt("quantity"),
+                    "$" + df.format(rs.getDouble("price_at_purchase")),
+                    "$" + df.format(rs.getDouble("subtotal"))
+                });
+                total += rs.getDouble("subtotal");
+            }
+
+            JPanel panel = new JPanel(new BorderLayout());
+            panel.add(new JScrollPane(table), BorderLayout.CENTER);
+            JLabel totalLabel = new JLabel("Total: $" + df.format(total));
+            totalLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
+            panel.add(totalLabel, BorderLayout.SOUTH);
+
+            dialog.add(panel);
+            dialog.setVisible(true);
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error loading order details: " + ex.getMessage());
+        }
+    }
+
+    private void cancelOrder() {
+        int row = tableHistory.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an order first!");
+            return;
+        }
+
+        int orderId = (Integer) modelHistory.getValueAt(row, 0);
+        String status = (String) modelHistory.getValueAt(row, 4);
+
+        if (!"pending".equals(status)) {
+            JOptionPane.showMessageDialog(this, 
+                "Only pending orders can be canceled!", 
+                "Cancel Error", 
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        int confirm = JOptionPane.showConfirmDialog(this, 
+            "Are you sure you want to cancel this order?", 
+            "Confirm Cancel", 
+            JOptionPane.YES_NO_OPTION);
+        
+        if (confirm == JOptionPane.YES_OPTION) {
+            try (Connection conn = DatabaseConnection.getConnection()) {
+                // Restore stock
+                String restoreSql = "UPDATE Products p " +
+                                  "JOIN Order_Items oi ON p.product_id = oi.product_id " +
+                                  "SET p.stock_quantity = p.stock_quantity + oi.quantity " +
+                                  "WHERE oi.order_id = ?";
+                PreparedStatement restoreStmt = conn.prepareStatement(restoreSql);
+                restoreStmt.setInt(1, orderId);
+                restoreStmt.executeUpdate();
+
+                // Update order status
+                String updateSql = "UPDATE Orders SET status = 'canceled' WHERE order_id = ?";
+                PreparedStatement updateStmt = conn.prepareStatement(updateSql);
+                updateStmt.setInt(1, orderId);
+                updateStmt.executeUpdate();
+
+                JOptionPane.showMessageDialog(this, "Order canceled successfully!");
+                loadOrderHistory();
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Error canceling order: " + ex.getMessage());
+            }
+        }
+    }
+
+    // Reviews Panel
+    private JPanel createReviewsPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+
+        String[] columns = {"Order ID", "Product", "Quantity", "Status"};
+        DefaultTableModel model = new DefaultTableModel(columns, 0) {
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return false;
+            }
+        };
+        JTable table = new JTable(model);
+        panel.add(new JScrollPane(table), BorderLayout.CENTER);
+
+        JButton btnReview = new JButton("Leave Review");
+        btnReview.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row == -1) {
+                JOptionPane.showMessageDialog(this, "Please select an item first!");
+                return;
+            }
+            // Review dialog will be shown
+        });
+
+        panel.add(btnReview, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private void loadReviewableItems() {
+        // Implementation for loading items that can be reviewed
+        // Only shipped orders can be reviewed
+    }
+
+    // Statistics Panel
     private JPanel createStatsPanel() {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         return panel;
     }
-    
-    private void updateStats(JPanel panel) {
+
+    private void updateStats() {
+        JPanel panel = (JPanel) tabbedPane.getComponentAt(4);
         panel.removeAll();
-        panel.add(new JLabel("=== My Statistics (SQL Calculated) ==="));
-        panel.add(Box.createVerticalStrut(20));
-        
+
         try (Connection conn = DatabaseConnection.getConnection()) {
-            String sql1 = "SELECT DATE_FORMAT(OrderDate, '%Y-%m') as M, SUM(TotalAmount) as T FROM Orders WHERE CustomerID = ? GROUP BY M";
-            PreparedStatement pst1 = conn.prepareStatement(sql1);
-            pst1.setInt(1, currentUser.getId());
-            ResultSet rs1 = pst1.executeQuery();
-            panel.add(new JLabel("Monthly Spending:"));
-            while(rs1.next()) panel.add(new JLabel(rs1.getString("M") + ": " + rs1.getDouble("T") + " TL"));
-            
+            // Monthly Total Purchase Amount
+            String monthlySql = "SELECT MONTH(order_date) as month, YEAR(order_date) as year, " +
+                               "SUM(total_amount) as total " +
+                               "FROM Orders " +
+                               "WHERE customer_id = ? AND status != 'ongoing' " +
+                               "GROUP BY YEAR(order_date), MONTH(order_date) " +
+                               "ORDER BY year DESC, month DESC";
+            PreparedStatement monthlyStmt = conn.prepareStatement(monthlySql);
+            monthlyStmt.setInt(1, currentUser.getUserId());
+            ResultSet monthlyRs = monthlyStmt.executeQuery();
+
+            panel.add(new JLabel("=== Monthly Purchase Amount ==="));
+            DecimalFormat df = new DecimalFormat("#0.00");
+            while (monthlyRs.next()) {
+                panel.add(new JLabel(monthlyRs.getInt("year") + "-" + 
+                                    String.format("%02d", monthlyRs.getInt("month")) + 
+                                    ": $" + df.format(monthlyRs.getDouble("total"))));
+            }
+
             panel.add(Box.createVerticalStrut(20));
-            
-            String sql2 = "SELECT c.CategoryName, COUNT(*) as Cnt FROM OrderItems oi " +
-                          "JOIN Products p ON oi.ProductID = p.ProductID JOIN Categories c ON p.CategoryID = c.CategoryID " +
-                          "JOIN Orders o ON oi.OrderID = o.OrderID WHERE o.CustomerID = ? " +
-                          "GROUP BY c.CategoryName ORDER BY Cnt DESC LIMIT 1";
-            PreparedStatement pst2 = conn.prepareStatement(sql2);
-            pst2.setInt(1, currentUser.getId());
-            ResultSet rs2 = pst2.executeQuery();
-            if(rs2.next()) panel.add(new JLabel("Favorite Category: " + rs2.getString(1) + " (" + rs2.getInt(2) + " items)"));
-            
-        } catch (SQLException ex) { ex.printStackTrace(); }
+
+            // Most Purchased Category
+            String categorySql = "SELECT c.name, SUM(oi.quantity) as total_quantity " +
+                                "FROM Order_Items oi " +
+                                "JOIN Products p ON oi.product_id = p.product_id " +
+                                "JOIN Categories c ON p.category_id = c.category_id " +
+                                "JOIN Orders o ON oi.order_id = o.order_id " +
+                                "WHERE o.customer_id = ? AND o.status != 'ongoing' " +
+                                "GROUP BY c.category_id, c.name " +
+                                "ORDER BY total_quantity DESC " +
+                                "LIMIT 1";
+            PreparedStatement categoryStmt = conn.prepareStatement(categorySql);
+            categoryStmt.setInt(1, currentUser.getUserId());
+            ResultSet categoryRs = categoryStmt.executeQuery();
+
+            panel.add(new JLabel("=== Most Purchased Category ==="));
+            if (categoryRs.next()) {
+                panel.add(new JLabel(categoryRs.getString("name") + 
+                                    " (" + categoryRs.getInt("total_quantity") + " items)"));
+            } else {
+                panel.add(new JLabel("No purchases yet"));
+            }
+
+            panel.add(Box.createVerticalStrut(20));
+
+            // Average Monthly Purchase
+            String avgSql = "SELECT AVG(monthly_total) as avg_monthly " +
+                           "FROM (SELECT YEAR(order_date) as year, MONTH(order_date) as month, " +
+                           "SUM(total_amount) as monthly_total " +
+                           "FROM Orders " +
+                           "WHERE customer_id = ? AND status != 'ongoing' " +
+                           "GROUP BY YEAR(order_date), MONTH(order_date)) as monthly";
+            PreparedStatement avgStmt = conn.prepareStatement(avgSql);
+            avgStmt.setInt(1, currentUser.getUserId());
+            ResultSet avgRs = avgStmt.executeQuery();
+
+            panel.add(new JLabel("=== Average Monthly Purchase ==="));
+            if (avgRs.next()) {
+                double avg = avgRs.getDouble("avg_monthly");
+                if (!avgRs.wasNull()) {
+                    panel.add(new JLabel("$" + df.format(avg)));
+                } else {
+                    panel.add(new JLabel("No purchases yet"));
+                }
+            }
+
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            panel.add(new JLabel("Error loading statistics: " + ex.getMessage()));
+        }
+
         panel.revalidate();
         panel.repaint();
+    }
+
+    // Addresses Panel
+    private JPanel createAddressesPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+
+        String[] columns = {"Address ID", "Street", "City", "Country"};
+        modelAddresses = new DefaultTableModel(columns, 0) {
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return false;
+            }
+        };
+        tableAddresses = new JTable(modelAddresses);
+        tableAddresses.getColumnModel().getColumn(0).setMinWidth(0);
+        tableAddresses.getColumnModel().getColumn(0).setMaxWidth(0);
+        tableAddresses.getColumnModel().getColumn(0).setWidth(0);
+        panel.add(new JScrollPane(tableAddresses), BorderLayout.CENTER);
+
+        JPanel btnPanel = new JPanel(new FlowLayout());
+        JButton btnAdd = new JButton("Add Address");
+        JButton btnEdit = new JButton("Edit Address");
+        JButton btnDelete = new JButton("Delete Address");
+        btnPanel.add(btnAdd);
+        btnPanel.add(btnEdit);
+        btnPanel.add(btnDelete);
+
+        btnAdd.addActionListener(e -> addAddress());
+        btnEdit.addActionListener(e -> editAddress());
+        btnDelete.addActionListener(e -> deleteAddress());
+
+        panel.add(btnPanel, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private void loadAddresses() {
+        modelAddresses.setRowCount(0);
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "SELECT address_id, street, city, country FROM Addresses WHERE user_id = ?";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, currentUser.getUserId());
+            ResultSet rs = pstmt.executeQuery();
+
+            while (rs.next()) {
+                modelAddresses.addRow(new Object[]{
+                    rs.getInt("address_id"),
+                    rs.getString("street"),
+                    rs.getString("city"),
+                    rs.getString("country")
+                });
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    private void addAddress() {
+        JTextField txtStreet = new JTextField(20);
+        JTextField txtCity = new JTextField(20);
+        JTextField txtCountry = new JTextField(20);
+
+        Object[] message = {
+            "Street:", txtStreet,
+            "City:", txtCity,
+            "Country:", txtCountry
+        };
+
+        int option = JOptionPane.showConfirmDialog(this, message, "Add Address", JOptionPane.OK_CANCEL_OPTION);
+        if (option == JOptionPane.OK_OPTION) {
+            if (txtStreet.getText().trim().isEmpty() || 
+                txtCity.getText().trim().isEmpty() || 
+                txtCountry.getText().trim().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "All fields are required!");
+                return;
+            }
+
+            try (Connection conn = DatabaseConnection.getConnection()) {
+                String sql = "INSERT INTO Addresses (user_id, street, city, country) VALUES (?, ?, ?, ?)";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setInt(1, currentUser.getUserId());
+                pstmt.setString(2, txtStreet.getText().trim());
+                pstmt.setString(3, txtCity.getText().trim());
+                pstmt.setString(4, txtCountry.getText().trim());
+                pstmt.executeUpdate();
+
+                JOptionPane.showMessageDialog(this, "Address added successfully!");
+                loadAddresses();
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Error adding address: " + ex.getMessage());
+            }
+        }
+    }
+
+    private void editAddress() {
+        int row = tableAddresses.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an address to edit!");
+            return;
+        }
+
+        int addressId = (Integer) modelAddresses.getValueAt(row, 0);
+        String currentStreet = (String) modelAddresses.getValueAt(row, 1);
+        String currentCity = (String) modelAddresses.getValueAt(row, 2);
+        String currentCountry = (String) modelAddresses.getValueAt(row, 3);
+
+        JTextField txtStreet = new JTextField(currentStreet, 20);
+        JTextField txtCity = new JTextField(currentCity, 20);
+        JTextField txtCountry = new JTextField(currentCountry, 20);
+
+        Object[] message = {
+            "Street:", txtStreet,
+            "City:", txtCity,
+            "Country:", txtCountry
+        };
+
+        int option = JOptionPane.showConfirmDialog(this, message, "Edit Address", JOptionPane.OK_CANCEL_OPTION);
+        if (option == JOptionPane.OK_OPTION) {
+            try (Connection conn = DatabaseConnection.getConnection()) {
+                String sql = "UPDATE Addresses SET street = ?, city = ?, country = ? WHERE address_id = ?";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setString(1, txtStreet.getText().trim());
+                pstmt.setString(2, txtCity.getText().trim());
+                pstmt.setString(3, txtCountry.getText().trim());
+                pstmt.setInt(4, addressId);
+                pstmt.executeUpdate();
+
+                JOptionPane.showMessageDialog(this, "Address updated successfully!");
+                loadAddresses();
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Error updating address: " + ex.getMessage());
+            }
+        }
+    }
+
+    private void deleteAddress() {
+        int row = tableAddresses.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an address to delete!");
+            return;
+        }
+
+        int addressId = (Integer) modelAddresses.getValueAt(row, 0);
+        int confirm = JOptionPane.showConfirmDialog(this, 
+            "Are you sure you want to delete this address?", 
+            "Confirm Delete", 
+            JOptionPane.YES_NO_OPTION);
+
+        if (confirm == JOptionPane.YES_OPTION) {
+            try (Connection conn = DatabaseConnection.getConnection()) {
+                String sql = "DELETE FROM Addresses WHERE address_id = ?";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setInt(1, addressId);
+                pstmt.executeUpdate();
+
+                JOptionPane.showMessageDialog(this, "Address deleted successfully!");
+                loadAddresses();
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Error deleting address: " + ex.getMessage());
+            }
+        }
+    }
+
+    // Helper class for address selection
+    private static class AddressSelectionDialog extends JDialog {
+        private int shippingAddressId;
+        private int billingAddressId;
+        private boolean confirmed = false;
+        private JComboBox<String> cmbShipping, cmbBilling;
+
+        public AddressSelectionDialog(JFrame parent, Connection conn, int userId, 
+                                     int currentShippingId, int currentBillingId) {
+            super(parent, "Select Addresses", true);
+            setSize(400, 300);
+            setLocationRelativeTo(parent);
+
+            JPanel panel = new JPanel(new GridBagLayout());
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(5, 5, 5, 5);
+
+            gbc.gridx = 0; gbc.gridy = 0;
+            panel.add(new JLabel("Shipping Address:"), gbc);
+            gbc.gridx = 1;
+            cmbShipping = new JComboBox<>();
+            loadAddresses(conn, userId, cmbShipping, currentShippingId);
+            panel.add(cmbShipping, gbc);
+
+            gbc.gridx = 0; gbc.gridy = 1;
+            panel.add(new JLabel("Billing Address:"), gbc);
+            gbc.gridx = 1;
+            cmbBilling = new JComboBox<>();
+            loadAddresses(conn, userId, cmbBilling, currentBillingId);
+            panel.add(cmbBilling, gbc);
+
+            gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2;
+            JPanel btnPanel = new JPanel(new FlowLayout());
+            JButton btnOK = new JButton("OK");
+            JButton btnCancel = new JButton("Cancel");
+            btnPanel.add(btnOK);
+            btnPanel.add(btnCancel);
+
+            btnOK.addActionListener(e -> {
+                String shipping = (String) cmbShipping.getSelectedItem();
+                String billing = (String) cmbBilling.getSelectedItem();
+                if (shipping != null && billing != null) {
+                    shippingAddressId = Integer.parseInt(shipping.split(" - ")[0]);
+                    billingAddressId = Integer.parseInt(billing.split(" - ")[0]);
+                    confirmed = true;
+                    dispose();
+                }
+            });
+
+            btnCancel.addActionListener(e -> dispose());
+            panel.add(btnPanel, gbc);
+
+            add(panel);
+        }
+
+        private void loadAddresses(Connection conn, int userId, JComboBox<String> cmb, int currentId) {
+            try {
+                String sql = "SELECT address_id, street, city, country FROM Addresses WHERE user_id = ?";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setInt(1, userId);
+                ResultSet rs = pstmt.executeQuery();
+
+                while (rs.next()) {
+                    int addrId = rs.getInt("address_id");
+                    String addr = addrId + " - " + rs.getString("street") + ", " + 
+                                rs.getString("city") + ", " + rs.getString("country");
+                    cmb.addItem(addr);
+                    if (addrId == currentId) {
+                        cmb.setSelectedItem(addr);
+                    }
+                }
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+        public boolean isConfirmed() { return confirmed; }
+        public int getShippingAddressId() { return shippingAddressId; }
+        public int getBillingAddressId() { return billingAddressId; }
     }
 }
