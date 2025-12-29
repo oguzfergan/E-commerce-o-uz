@@ -1,122 +1,193 @@
-import java.awt.*;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.sql.*;
 
 public class RegisterFrame extends JFrame {
-
-    private JTextField txtUsername, txtEmail, txtFirstName, txtLastName, txtPhone;
+    private JTextField txtName;
+    private JTextField txtEmail;
     private JPasswordField txtPassword;
-    private JComboBox<String> cmbRole;
-    private JButton btnRegister, btnCancel;
+    private JPasswordField txtConfirmPassword;
+    private JButton btnRegister;
+    private JButton btnCancel;
+    private String role;
 
-    public RegisterFrame() {
-        setTitle("E-Commerce System - Register");
-        setSize(400, 500);
+    public RegisterFrame(String role) {
+        this.role = role;
+        setTitle("Register as " + role);
+        setSize(400, 300);
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         setLocationRelativeTo(null);
-        setLayout(new GridLayout(9, 2, 10, 10));
-
-        add(new JLabel("  Username:"));
-        txtUsername = new JTextField();
-        add(txtUsername);
-
-        add(new JLabel("  Email:"));
-        txtEmail = new JTextField();
-        add(txtEmail);
-
-        add(new JLabel("  Password:"));
-        txtPassword = new JPasswordField();
-        add(txtPassword);
-
-        add(new JLabel("  First Name:"));
-        txtFirstName = new JTextField();
-        add(txtFirstName);
-
-        add(new JLabel("  Last Name:"));
-        txtLastName = new JTextField();
-        add(txtLastName);
-
-        add(new JLabel("  Phone:"));
-        txtPhone = new JTextField();
-        add(txtPhone);
-
-        add(new JLabel("  Account Type:"));
-        String[] roles = {"Customer", "Seller"};
-        cmbRole = new JComboBox<>(roles);
-        add(cmbRole);
-
+        
+        JPanel mainPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+        
+        gbc.gridx = 0; gbc.gridy = 0;
+        mainPanel.add(new JLabel("Name:"), gbc);
+        gbc.gridx = 1;
+        txtName = new JTextField(20);
+        mainPanel.add(txtName, gbc);
+        
+        gbc.gridx = 0; gbc.gridy = 1;
+        mainPanel.add(new JLabel("Email:"), gbc);
+        gbc.gridx = 1;
+        txtEmail = new JTextField(20);
+        mainPanel.add(txtEmail, gbc);
+        
+        gbc.gridx = 0; gbc.gridy = 2;
+        mainPanel.add(new JLabel("Password:"), gbc);
+        gbc.gridx = 1;
+        txtPassword = new JPasswordField(20);
+        mainPanel.add(txtPassword, gbc);
+        
+        gbc.gridx = 0; gbc.gridy = 3;
+        mainPanel.add(new JLabel("Confirm Password:"), gbc);
+        gbc.gridx = 1;
+        txtConfirmPassword = new JPasswordField(20);
+        mainPanel.add(txtConfirmPassword, gbc);
+        
+        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 2;
+        gbc.anchor = GridBagConstraints.CENTER;
+        JPanel buttonPanel = new JPanel(new FlowLayout());
         btnRegister = new JButton("Register");
         btnCancel = new JButton("Cancel");
-        add(btnRegister);
-        add(btnCancel);
-
-        btnRegister.addActionListener(e -> registerUser());
-        btnCancel.addActionListener(e -> this.dispose());
-
-        setVisible(true);
+        buttonPanel.add(btnRegister);
+        buttonPanel.add(btnCancel);
+        mainPanel.add(buttonPanel, gbc);
+        
+        add(mainPanel);
+        
+        btnRegister.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                registerUser();
+            }
+        });
+        
+        btnCancel.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                dispose();
+            }
+        });
     }
-
+    
     private void registerUser() {
-        String username = txtUsername.getText().trim();
+        String name = txtName.getText().trim();
         String email = txtEmail.getText().trim();
         String password = new String(txtPassword.getPassword());
-        String fName = txtFirstName.getText().trim();
-        String lName = txtLastName.getText().trim();
-        String phone = txtPhone.getText().trim();
-        String role = (String) cmbRole.getSelectedItem();
-
-        if (username.isEmpty() || email.isEmpty() || password.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Please fill in all mandatory fields!", "Error", JOptionPane.ERROR_MESSAGE);
+        String confirmPassword = new String(txtConfirmPassword.getPassword());
+        
+        // Validation using ValidationUtil
+        try {
+            ValidationUtil.validateName(name);
+            ValidationUtil.validateEmail(email);
+            ValidationUtil.validatePassword(password);
+        } catch (ValidationException e) {
+            JOptionPane.showMessageDialog(this, 
+                e.getMessage(), 
+                "Validation Error", 
+                JOptionPane.WARNING_MESSAGE);
             return;
         }
-
-        try (Connection conn = DatabaseConnection.getConnection()) {
-            String sql = "INSERT INTO Users (Username, Email, PasswordHash, Role, FirstName, LastName, PhoneNumber) VALUES (?, ?, ?, ?, ?, ?, ?)";
-            PreparedStatement pstmt = conn.prepareStatement(sql);
-            pstmt.setString(1, username);
-            pstmt.setString(2, email);
-            pstmt.setString(3, password); 
-            pstmt.setString(4, role);
-            pstmt.setString(5, fName);
-            pstmt.setString(6, lName);
-            pstmt.setString(7, phone);
-
-            int result = pstmt.executeUpdate();
-            if (result > 0) {
-                JOptionPane.showMessageDialog(this, "Registration Successful! Please Login.");
-                
-                if ("Seller".equals(role)) {
-                    createCatalogForSeller(conn, username);
-                }
-                this.dispose();
-            }
-
-        } catch (SQLException ex) {
-            if (ex.getMessage().contains("Duplicate")) {
-                JOptionPane.showMessageDialog(this, "Username or Email already exists!", "Error", JOptionPane.WARNING_MESSAGE);
-            } else {
-                ex.printStackTrace();
-                JOptionPane.showMessageDialog(this, "Database Error: " + ex.getMessage());
-            }
+        
+        if (!password.equals(confirmPassword)) {
+            JOptionPane.showMessageDialog(this, 
+                "Passwords do not match!", 
+                "Validation Error", 
+                JOptionPane.WARNING_MESSAGE);
+            return;
         }
-    }
-
-    private void createCatalogForSeller(Connection conn, String username) throws SQLException {
-        String idSql = "SELECT UserID FROM Users WHERE Username = ?";
-        PreparedStatement p1 = conn.prepareStatement(idSql);
-        p1.setString(1, username);
-        ResultSet rs = p1.executeQuery();
-        if (rs.next()) {
-            int userId = rs.getInt(1);
-            String catSql = "INSERT INTO Catalogs (SellerID, CatalogName, Description) VALUES (?, ?, ?)";
-            PreparedStatement p2 = conn.prepareStatement(catSql);
-            p2.setInt(1, userId);
-            p2.setString(2, username + "'s Catalog");
-            p2.setString(3, "Welcome to my shop!");
-            p2.executeUpdate();
+        
+        Connection conn = null;
+        try {
+            conn = DatabaseConnection.getConnection();
+            conn.setAutoCommit(false);  // Start transaction
+            
+            // Check if email already exists
+            String checkSql = "SELECT user_id FROM Users WHERE email = ?";
+            PreparedStatement checkStmt = conn.prepareStatement(checkSql);
+            checkStmt.setString(1, email);
+            ResultSet rs = checkStmt.executeQuery();
+            
+            if (rs.next()) {
+                conn.rollback();
+                JOptionPane.showMessageDialog(this, 
+                    "Email already exists! Please use a different email.", 
+                    "Registration Error", 
+                    JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            // Hash password before storing
+            String hashedPassword = PasswordUtil.hashPassword(password);
+            
+            // Insert new user
+            String sql = "INSERT INTO Users (name, email, password, role, is_active) VALUES (?, ?, ?, ?, TRUE)";
+            PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
+            pstmt.setString(1, ValidationUtil.sanitizeString(name));
+            pstmt.setString(2, email.toLowerCase());
+            pstmt.setString(3, hashedPassword);
+            pstmt.setString(4, role);
+            
+            int result = pstmt.executeUpdate();
+            
+            if (result > 0) {
+                ResultSet generatedKeys = pstmt.getGeneratedKeys();
+                if (generatedKeys.next()) {
+                    int userId = generatedKeys.getInt(1);
+                    
+                    // If seller, create catalog
+                    if ("Seller".equals(role)) {
+                        String catalogSql = "INSERT INTO Catalogs (seller_id, catalog_name, description, is_available) VALUES (?, ?, ?, TRUE)";
+                        PreparedStatement catalogStmt = conn.prepareStatement(catalogSql);
+                        catalogStmt.setInt(1, userId);
+                        catalogStmt.setString(2, name + "'s Catalog");
+                        catalogStmt.setString(3, "Welcome to my shop!");
+                        catalogStmt.executeUpdate();
+                    }
+                }
+                
+                conn.commit();  // Commit transaction
+                JOptionPane.showMessageDialog(this, 
+                    "Registration successful! Please login.", 
+                    "Success", 
+                    JOptionPane.INFORMATION_MESSAGE);
+                dispose();
+            } else {
+                conn.rollback();
+            }
+            
+        } catch (SQLIntegrityConstraintViolationException e) {
+            try {
+                if (conn != null) conn.rollback();
+            } catch (SQLException rollbackEx) {
+                rollbackEx.printStackTrace();
+            }
+            JOptionPane.showMessageDialog(this, 
+                "Email already exists! Please use a different email.", 
+                "Registration Error", 
+                JOptionPane.ERROR_MESSAGE);
+        } catch (SQLException ex) {
+            try {
+                if (conn != null) conn.rollback();
+            } catch (SQLException rollbackEx) {
+                rollbackEx.printStackTrace();
+            }
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, 
+                "Database error: " + ex.getMessage(), 
+                "Error", 
+                JOptionPane.ERROR_MESSAGE);
+        } finally {
+            try {
+                if (conn != null) conn.setAutoCommit(true);
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
         }
     }
 }
