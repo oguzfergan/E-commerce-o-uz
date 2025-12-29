@@ -4,14 +4,14 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 
 public class SellerDashboard extends JFrame {
-    private int sellerId;
+    private User currentUser; // User nesnesi olarak güncellendi
     private JTabbedPane tabbedPane;
     private JTable tableProducts, tableOrders;
     private DefaultTableModel modelProducts, modelOrders;
 
-    public SellerDashboard(int userId) {
-        this.sellerId = userId;
-        setTitle("Seller Dashboard - ID: " + userId);
+    public SellerDashboard(User user) {
+        this.currentUser = user; // User nesnesini alıyoruz
+        setTitle("Seller Dashboard - " + user.getFullName());
         setSize(900, 600);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
@@ -48,7 +48,6 @@ public class SellerDashboard extends JFrame {
         btnRestock.addActionListener(e -> updateStockAction());
         btnRefresh.addActionListener(e -> loadMyProducts());
         
-        // Add Product özelliği yeni bir pencere gerektirir, demo için mesaj veriyoruz
         btnAdd.addActionListener(e -> JOptionPane.showMessageDialog(this, "Add Product Feature requires a form dialog."));
 
         btnPanel.add(btnRefresh);
@@ -61,14 +60,12 @@ public class SellerDashboard extends JFrame {
     private void loadMyProducts() {
         modelProducts.setRowCount(0);
         try (Connection conn = DatabaseConnection.getConnection()) {
-            // View kullanıyoruz: vw_SellerProductCatalog
-            // Ancak bu view Seller ismini içeriyor, ID filtrelemesi için join veya doğrudan tablo sorgusu daha güvenli.
-            // DDL'e göre direkt Products ve Catalogs tablolarını kullanmak en temizi.
+            // Catalogs üzerinden SellerID'ye göre filtreleme yapıyoruz
             String sql = "SELECT p.ProductID, p.ProductName, p.StockQuantity, p.Price, p.IsActive " +
                          "FROM Products p JOIN Catalogs c ON p.CatalogID = c.CatalogID " +
                          "WHERE c.SellerID = ?";
             PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, sellerId);
+            pst.setInt(1, currentUser.getId()); // User ID kullanılıyor
             ResultSet rs = pst.executeQuery();
             while(rs.next()) {
                 modelProducts.addRow(new Object[]{
@@ -122,12 +119,12 @@ public class SellerDashboard extends JFrame {
     private void loadIncomingOrders() {
         modelOrders.setRowCount(0);
         try (Connection conn = DatabaseConnection.getConnection()) {
-
+            // SellerID'ye göre gelen siparişler
             String sql = "SELECT o.OrderID, u.FirstName, o.OrderDate, o.TotalAmount, o.OrderStatus " +
                          "FROM Orders o JOIN Users u ON o.CustomerID = u.UserID " +
                          "WHERE o.SellerID = ? ORDER BY o.OrderDate DESC";
             PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, sellerId);
+            pst.setInt(1, currentUser.getId());
             ResultSet rs = pst.executeQuery();
             while(rs.next()) {
                 modelOrders.addRow(new Object[]{
@@ -151,7 +148,6 @@ public class SellerDashboard extends JFrame {
         }
 
         try (Connection conn = DatabaseConnection.getConnection()) {
-       
             String sql = "UPDATE Orders SET OrderStatus = 'Confirmed' WHERE OrderID = ?";
             PreparedStatement pst = conn.prepareStatement(sql);
             pst.setInt(1, orderId);
@@ -161,7 +157,7 @@ public class SellerDashboard extends JFrame {
         } catch (SQLException ex) { ex.printStackTrace(); }
     }
 
- // STATS//
+    // STATS//
     private JPanel createStatsPanel() {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
@@ -177,7 +173,7 @@ public class SellerDashboard extends JFrame {
             
             String sql = "SELECT SUM(TotalAmount) FROM Orders WHERE SellerID = ? AND OrderStatus != 'Cancelled'";
             PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, sellerId);
+            pst.setInt(1, currentUser.getId());
             ResultSet rs = pst.executeQuery();
             if(rs.next()) panel.add(new JLabel("Total Revenue: " + rs.getDouble(1) + " TL"));
             
@@ -185,7 +181,7 @@ public class SellerDashboard extends JFrame {
                           "JOIN Products p ON oi.ProductID = p.ProductID JOIN Catalogs c ON p.CatalogID = c.CatalogID " +
                           "WHERE c.SellerID = ? GROUP BY p.ProductName ORDER BY Qty DESC LIMIT 1";
             PreparedStatement pst2 = conn.prepareStatement(sql2);
-            pst2.setInt(1, sellerId);
+            pst2.setInt(1, currentUser.getId());
             ResultSet rs2 = pst2.executeQuery();
             if(rs2.next()) panel.add(new JLabel("Best Seller: " + rs2.getString(1) + " (" + rs2.getInt(2) + " units)"));
             

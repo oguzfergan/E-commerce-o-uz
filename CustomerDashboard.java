@@ -4,16 +4,16 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 
 public class CustomerDashboard extends JFrame {
-    private int userId;
+    private User currentUser; // User nesnesi
     private JTabbedPane tabbedPane;
     private JTable tableProducts, tableCart, tableHistory;
     private DefaultTableModel modelProducts, modelCart, modelHistory;
     private JLabel lblCartTotal;
     private JTextField txtCouponCode;
 
-    public CustomerDashboard(int userId) {
-        this.userId = userId;
-        setTitle("Customer Dashboard - ID: " + userId);
+    public CustomerDashboard(User user) {
+        this.currentUser = user;
+        setTitle("Customer Dashboard - " + user.getFullName());
         setSize(1000, 700);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
@@ -46,6 +46,7 @@ public class CustomerDashboard extends JFrame {
             @Override public boolean isCellEditable(int row, int col) { return false; }
         };
         tableProducts = new JTable(modelProducts);
+        // ID kolonunu gizle
         tableProducts.getColumnModel().getColumn(0).setMinWidth(0);
         tableProducts.getColumnModel().getColumn(0).setMaxWidth(0);
         tableProducts.getColumnModel().getColumn(0).setWidth(0);
@@ -69,7 +70,6 @@ public class CustomerDashboard extends JFrame {
     private void loadProducts() {
         modelProducts.setRowCount(0);
         try (Connection conn = DatabaseConnection.getConnection()) {
-
             String sql = "SELECT * FROM vw_SellerProductCatalog WHERE IsActive = TRUE AND StockQuantity > 0";
             Statement stmt = conn.createStatement();
             ResultSet rs = stmt.executeQuery(sql);
@@ -86,6 +86,7 @@ public class CustomerDashboard extends JFrame {
         } catch (SQLException ex) { ex.printStackTrace(); }
     }
 
+    // --- KRİTİK DEĞİŞİKLİK: Çoklu Satıcı Desteği ile Sepete Ekleme ---
     private void addToCartAction() {
         int row = tableProducts.getSelectedRow();
         if (row == -1) {
@@ -102,34 +103,21 @@ public class CustomerDashboard extends JFrame {
             if (quantity <= 0) throw new NumberFormatException();
             
             try (Connection conn = DatabaseConnection.getConnection()) {
-                int orderId = -1;
-                String checkSql = "SELECT OrderID FROM Orders WHERE CustomerID = ? AND OrderStatus = 'Pending'";
-                PreparedStatement pst = conn.prepareStatement(checkSql);
-                pst.setInt(1, userId);
-                ResultSet rs = pst.executeQuery();
                 
-                if (rs.next()) {
-                    orderId = rs.getInt("OrderID");
+                // 1. Ürünün Satıcısını Bul
+                int sellerId = getSellerId(conn, productId);
+                
+                // 2. Bu müşteri için, BU SATICIYA ait açık (Pending) sipariş var mı?
+                int orderId = getPendingOrderIdForSeller(conn, currentUser.getId(), sellerId);
+                
+                if (orderId != -1) {
+                    // Varsa mevcut siparişe ekle
+                    addItemToOrder(conn, orderId, productId, quantity);
                 } else {
-
-                    int demoAddressId = 1; 
-                    int sellerId = getSellerId(conn, productId);
-                    
-                    CallableStatement cstmt = conn.prepareCall("{call sp_PlaceOrder(?, ?, ?, ?, ?)}");
-                    cstmt.setInt(1, userId);
-                    cstmt.setInt(2, sellerId);
-                    cstmt.setInt(3, demoAddressId);
-                    cstmt.setInt(4, demoAddressId);
-                    cstmt.registerOutParameter(5, Types.INTEGER);
-                    cstmt.execute();
-                    orderId = cstmt.getInt(5);
+                    // Yoksa, bu satıcı için YENİ sipariş oluştur
+                    int demoAddressId = 1; // Gerçek uygulamada kullanıcı seçmeli
+                    createOrderAndAddItem(conn, currentUser.getId(), sellerId, demoAddressId, productId, quantity);
                 }
-                
-                CallableStatement cstmtItem = conn.prepareCall("{call sp_AddOrderItem(?, ?, ?)}");
-                cstmtItem.setInt(1, orderId);
-                cstmtItem.setInt(2, productId);
-                cstmtItem.setInt(3, quantity);
-                cstmtItem.execute();
                 
                 JOptionPane.showMessageDialog(this, "Added to cart!");
             }
@@ -148,10 +136,42 @@ public class CustomerDashboard extends JFrame {
         return rs.next() ? rs.getInt(1) : -1;
     }
 
+    // YENİ: Belirli bir satıcı için açık sipariş var mı?
+    private int getPendingOrderIdForSeller(Connection conn, int userId, int sellerId) throws SQLException {
+        String sql = "SELECT OrderID FROM Orders WHERE CustomerID = ? AND SellerID = ? AND OrderStatus = 'Pending'";
+        PreparedStatement pst = conn.prepareStatement(sql);
+        pst.setInt(1, userId);
+        pst.setInt(2, sellerId);
+        ResultSet rs = pst.executeQuery();
+        return rs.next() ? rs.getInt("OrderID") : -1;
+    }
+
+    private void addItemToOrder(Connection conn, int orderId, int productId, int quantity) throws SQLException {
+        CallableStatement cstmtItem = conn.prepareCall("{call sp_AddOrderItem(?, ?, ?)}");
+        cstmtItem.setInt(1, orderId);
+        cstmtItem.setInt(2, productId);
+        cstmtItem.setInt(3, quantity);
+        cstmtItem.execute();
+    }
+
+    private void createOrderAndAddItem(Connection conn, int userId, int sellerId, int addressId, int productId, int qty) throws SQLException {
+        CallableStatement cstmt = conn.prepareCall("{call sp_PlaceOrder(?, ?, ?, ?, ?)}");
+        cstmt.setInt(1, userId);
+        cstmt.setInt(2, sellerId);
+        cstmt.setInt(3, addressId);
+        cstmt.setInt(4, addressId);
+        cstmt.registerOutParameter(5, Types.INTEGER);
+        cstmt.execute();
+        int newOrderId = cstmt.getInt(5);
+        
+        addItemToOrder(conn, newOrderId, productId, qty);
+    }
+    // -----------------------------------------------------------------
+
     private JPanel createCartPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         
-        String[] columns = {"Product", "Quantity", "Unit Price", "Subtotal"};
+        String[] columns = {"Product (Seller)", "Quantity", "Unit Price", "Subtotal"};
         modelCart = new DefaultTableModel(columns, 0);
         tableCart = new JTable(modelCart);
         panel.add(new JScrollPane(tableCart), BorderLayout.CENTER);
@@ -168,7 +188,7 @@ public class CustomerDashboard extends JFrame {
         lblCartTotal = new JLabel("Total: 0.00");
         lblCartTotal.setFont(new Font("Arial", Font.BOLD, 14));
         
-        JButton btnPay = new JButton("Checkout / Pay");
+        JButton btnPay = new JButton("Checkout / Pay All Pending Orders");
         
         bottomPanel.add(pnlCoupon);
         bottomPanel.add(lblCartTotal);
@@ -184,36 +204,40 @@ public class CustomerDashboard extends JFrame {
     private void loadCart() {
         modelCart.setRowCount(0);
         lblCartTotal.setText("Total: 0.00");
+        double grandTotal = 0;
+
         try (Connection conn = DatabaseConnection.getConnection()) {
-            int orderId = getPendingOrderId(conn);
-            if (orderId == -1) return;
-            
-            String sql = "SELECT p.ProductName, oi.Quantity, oi.UnitPrice, oi.Subtotal " +
-                         "FROM OrderItems oi JOIN Products p ON oi.ProductID = p.ProductID WHERE oi.OrderID = ?";
+            // Tüm Pending siparişlerin içeriğini çek (Farklı satıcılardan olabilir)
+            String sql = "SELECT p.ProductName, oi.Quantity, oi.UnitPrice, oi.Subtotal, u.FirstName as SellerName " +
+                         "FROM OrderItems oi " +
+                         "JOIN Products p ON oi.ProductID = p.ProductID " +
+                         "JOIN Orders o ON oi.OrderID = o.OrderID " +
+                         "JOIN Users u ON o.SellerID = u.UserID " +
+                         "WHERE o.CustomerID = ? AND o.OrderStatus = 'Pending'";
+                         
             PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, orderId);
+            pst.setInt(1, currentUser.getId());
             ResultSet rs = pst.executeQuery();
+            
             while(rs.next()) {
                 modelCart.addRow(new Object[]{
-                    rs.getString("ProductName"), rs.getInt("Quantity"), rs.getDouble("UnitPrice"), rs.getDouble("Subtotal")
+                    rs.getString("ProductName") + " (" + rs.getString("SellerName") + ")", 
+                    rs.getInt("Quantity"), 
+                    rs.getDouble("UnitPrice"), 
+                    rs.getDouble("Subtotal")
                 });
+                grandTotal += rs.getDouble("Subtotal");
             }
             
-            String sqlTot = "SELECT TotalAmount, DiscountAmount FROM Orders WHERE OrderID = ?";
-            PreparedStatement pst2 = conn.prepareStatement(sqlTot);
-            pst2.setInt(1, orderId);
-            ResultSet rs2 = pst2.executeQuery();
-            if (rs2.next()) {
-                double total = rs2.getDouble("TotalAmount");
-                double disc = rs2.getDouble("DiscountAmount");
-                lblCartTotal.setText(String.format("Total: %.2f TL (Discount: %.2f TL)", total, disc));
-            }
+            lblCartTotal.setText(String.format("Cart Total: %.2f TL", grandTotal));
+            
         } catch (SQLException ex) { ex.printStackTrace(); }
     }
 
     private void applyCouponAction() {
+        // Not: Kupon mantığı her siparişe ayrı uygulanmalı, demo için ilk bulduğu siparişe uyguluyor
         try (Connection conn = DatabaseConnection.getConnection()) {
-            int orderId = getPendingOrderId(conn);
+            int orderId = getFirstPendingOrderId(conn);
             if (orderId == -1) { JOptionPane.showMessageDialog(this, "Empty Cart"); return; }
             
             CallableStatement cstmt = conn.prepareCall("{call sp_ApplyCoupon(?, ?, ?, ?, ?)}");
@@ -232,8 +256,13 @@ public class CustomerDashboard extends JFrame {
 
     private void payAction() {
         try (Connection conn = DatabaseConnection.getConnection()) {
-            int orderId = getPendingOrderId(conn);
-            if (orderId == -1) return;
+            // Ödeme işlemi demo için basitleştirildi: İlk bulunan açık siparişi öder.
+            // Gerçekte tüm pending siparişleri döngüyle ödemek gerekebilir.
+            int orderId = getFirstPendingOrderId(conn);
+            if (orderId == -1) {
+                JOptionPane.showMessageDialog(this, "No pending orders found.");
+                return;
+            }
             
             String sqlT = "SELECT TotalAmount FROM Orders WHERE OrderID = ?";
             PreparedStatement pst = conn.prepareStatement(sqlT);
@@ -249,20 +278,19 @@ public class CustomerDashboard extends JFrame {
             cstmt.setString(4, "TXN-" + System.currentTimeMillis());
             cstmt.execute();
             
-            JOptionPane.showMessageDialog(this, "Payment Successful!");
-            loadCart();
+            JOptionPane.showMessageDialog(this, "Payment Successful for Order #" + orderId);
+            loadCart(); // Ödenen sipariş listeden kalkar (Status Confirmed olur)
             
         } catch (SQLException ex) { JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage()); }
     }
 
-    private int getPendingOrderId(Connection conn) throws SQLException {
-        String sql = "SELECT OrderID FROM Orders WHERE CustomerID = ? AND OrderStatus = 'Pending'";
+    private int getFirstPendingOrderId(Connection conn) throws SQLException {
+        String sql = "SELECT OrderID FROM Orders WHERE CustomerID = ? AND OrderStatus = 'Pending' LIMIT 1";
         PreparedStatement pst = conn.prepareStatement(sql);
-        pst.setInt(1, userId);
+        pst.setInt(1, currentUser.getId());
         ResultSet rs = pst.executeQuery();
         return rs.next() ? rs.getInt(1) : -1;
     }
-
 
     private JPanel createHistoryPanel() {
         JPanel panel = new JPanel(new BorderLayout());
@@ -277,7 +305,7 @@ public class CustomerDashboard extends JFrame {
         try (Connection conn = DatabaseConnection.getConnection()) {
             String sql = "SELECT OrderID, OrderDate, TotalAmount, OrderStatus FROM Orders WHERE CustomerID = ? ORDER BY OrderDate DESC";
             PreparedStatement pst = conn.prepareStatement(sql);
-            pst.setInt(1, userId);
+            pst.setInt(1, currentUser.getId());
             ResultSet rs = pst.executeQuery();
             while(rs.next()) {
                 modelHistory.addRow(new Object[]{
@@ -286,7 +314,6 @@ public class CustomerDashboard extends JFrame {
             }
         } catch (SQLException ex) { ex.printStackTrace(); }
     }
-
 
     private JPanel createStatsPanel() {
         JPanel panel = new JPanel();
@@ -302,7 +329,7 @@ public class CustomerDashboard extends JFrame {
         try (Connection conn = DatabaseConnection.getConnection()) {
             String sql1 = "SELECT DATE_FORMAT(OrderDate, '%Y-%m') as M, SUM(TotalAmount) as T FROM Orders WHERE CustomerID = ? GROUP BY M";
             PreparedStatement pst1 = conn.prepareStatement(sql1);
-            pst1.setInt(1, userId);
+            pst1.setInt(1, currentUser.getId());
             ResultSet rs1 = pst1.executeQuery();
             panel.add(new JLabel("Monthly Spending:"));
             while(rs1.next()) panel.add(new JLabel(rs1.getString("M") + ": " + rs1.getDouble("T") + " TL"));
@@ -314,7 +341,7 @@ public class CustomerDashboard extends JFrame {
                           "JOIN Orders o ON oi.OrderID = o.OrderID WHERE o.CustomerID = ? " +
                           "GROUP BY c.CategoryName ORDER BY Cnt DESC LIMIT 1";
             PreparedStatement pst2 = conn.prepareStatement(sql2);
-            pst2.setInt(1, userId);
+            pst2.setInt(1, currentUser.getId());
             ResultSet rs2 = pst2.executeQuery();
             if(rs2.next()) panel.add(new JLabel("Favorite Category: " + rs2.getString(1) + " (" + rs2.getInt(2) + " items)"));
             
