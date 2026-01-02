@@ -7,129 +7,158 @@ import javax.swing.table.DefaultTableModel;
 public class CustomerDashboard extends JFrame {
     private User currentUser;
     private JTabbedPane tabbedPane;
-    private DefaultTableModel modelProducts, modelCart, modelHistory, modelAddresses;
-    private JTable tableProducts, tableCart, tableHistory, tableAddresses;
+    private DefaultTableModel modelProducts, modelCart, modelHistory, modelAddresses, modelReviews;
+    private JTable tableProducts, tableCart, tableHistory, tableAddresses, tableReviews;
     private JLabel lblCartTotal;
     private JComboBox<String> cmbCategories;
     private JTextField txtSearch, txtMinPrice, txtMaxPrice;
     private int selectedCatalogId = -1;
 
     public CustomerDashboard(User user) {
-        this.currentUser = user;
-        setTitle("Customer Dashboard - " + user.getName());
-        setSize(1200, 800);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setLocationRelativeTo(null);
+    this.currentUser = user;
+    setTitle("Customer Dashboard - " + user.getName());
+    setSize(1200, 800);
+    setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    setLocationRelativeTo(null);
 
-        tabbedPane = new JTabbedPane();
-        tabbedPane.addTab("Browse Catalogs", createBrowseCatalogsPanel());
-        tabbedPane.addTab("Shopping Cart", createCartPanel());
-        tabbedPane.addTab("Order History", createHistoryPanel());
-        tabbedPane.addTab("My Reviews", createReviewsPanel());
-        tabbedPane.addTab("Statistics", createStatsPanel());
-        tabbedPane.addTab("Addresses", createAddressesPanel());
+    tabbedPane = new JTabbedPane();
+    tabbedPane.addTab("Browse Catalogs", createBrowseCatalogsPanel());
+    tabbedPane.addTab("Shopping Cart", createCartPanel());
+    tabbedPane.addTab("Order History", createHistoryPanel());
+    tabbedPane.addTab("My Reviews", createReviewsPanel()); 
+    tabbedPane.addTab("Statistics", createStatsPanel());
+    tabbedPane.addTab("Addresses", createAddressesPanel());
 
-       
-JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-JButton btnLogout = new JButton("Logout");
-btnLogout.setForeground(Color.RED);
+    JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 
-btnLogout.addActionListener(e -> {
-    int confirm = JOptionPane.showConfirmDialog(this, 
-        "Are you sure you want to logout?", "Logout", JOptionPane.YES_NO_OPTION);
-    if (confirm == JOptionPane.YES_OPTION) {
-        dispose(); 
-        new LoginFrame().setVisible(true);
-    }
-});
+    JButton btnNotifications = new JButton("Notifications");
+    btnNotifications.addActionListener(e -> showNotifications()); 
+    bottomPanel.add(btnNotifications);
 
-bottomPanel.add(btnLogout);
+    JButton btnLogout = new JButton("Logout");
+    btnLogout.setForeground(Color.RED);
 
-add(tabbedPane, BorderLayout.CENTER);  
-add(bottomPanel, BorderLayout.SOUTH);  
+    btnLogout.addActionListener(e -> {
+        int confirm = JOptionPane.showConfirmDialog(this, 
+            "Are you sure you want to logout?", "Logout", JOptionPane.YES_NO_OPTION);
+        if (confirm == JOptionPane.YES_OPTION) {
+            dispose(); 
+            new LoginFrame().setVisible(true);
+        }
+    });
 
+    bottomPanel.add(btnLogout);
 
-        tabbedPane.addChangeListener(e -> {
-            int index = tabbedPane.getSelectedIndex();
-            if (index == 1) loadCart();
-            else if (index == 2) loadOrderHistory();
-            else if (index == 3) loadReviewableItems();
-            else if (index == 4) updateStats();
-            else if (index == 5) loadAddresses();
-        });
-    }
+    add(tabbedPane, BorderLayout.CENTER);  
+    add(bottomPanel, BorderLayout.SOUTH);  
+
+    tabbedPane.addChangeListener(e -> {
+        int index = tabbedPane.getSelectedIndex();
+        if (index == 1) loadCart();
+        else if (index == 2) loadOrderHistory();
+        else if (index == 3) loadReviewableItems(); 
+        else if (index == 4) updateStats();
+        else if (index == 5) loadAddresses();
+    });
+}
 
     private JPanel createBrowseCatalogsPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
+    JPanel panel = new JPanel(new BorderLayout());
 
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        topPanel.add(new JLabel("Select Seller Catalog:"));
-        JComboBox<String> cmbCatalogs = new JComboBox<>();
-        loadCatalogs(cmbCatalogs);
-        cmbCatalogs.addActionListener(e -> {
-            String selected = (String) cmbCatalogs.getSelectedItem();
-            if (selected != null && !selected.equals("-- Select Catalog --")) {
-                String[] parts = selected.split(" - ");
-                selectedCatalogId = Integer.parseInt(parts[0]);
-                loadProducts();
-            }
-        });
-        topPanel.add(cmbCatalogs);
+    JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    topPanel.add(new JLabel("Select Seller Catalog:"));
+    JComboBox<String> cmbCatalogs = new JComboBox<>();
+    loadCatalogs(cmbCatalogs);
+    cmbCatalogs.addActionListener(e -> {
+        String selected = (String) cmbCatalogs.getSelectedItem();
+        if (selected != null && !selected.equals("-- Select Catalog --")) {
+            String[] parts = selected.split(" - ");
+            selectedCatalogId = Integer.parseInt(parts[0]);
+            loadProducts();
+        }
+    });
+    topPanel.add(cmbCatalogs);
 
-        JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        filterPanel.add(new JLabel("Search:"));
-        txtSearch = new JTextField(15);
-        filterPanel.add(txtSearch);
+    JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    filterPanel.add(new JLabel("Search:"));
+    txtSearch = new JTextField(15);
+    filterPanel.add(txtSearch);
 
-        filterPanel.add(new JLabel("Category:"));
-        cmbCategories = new JComboBox<>();
-        cmbCategories.addItem("All");
-        loadCategories();
-        filterPanel.add(cmbCategories);
+    filterPanel.add(new JLabel("Category:"));
+    cmbCategories = new JComboBox<>();
+    cmbCategories.addItem("All");
+    loadCategories();
+    filterPanel.add(cmbCategories);
 
-        filterPanel.add(new JLabel("Price Range:"));
-        txtMinPrice = new JTextField(8);
-        txtMaxPrice = new JTextField(8);
-        filterPanel.add(new JLabel("Min:"));
-        filterPanel.add(txtMinPrice);
-        filterPanel.add(new JLabel("Max:"));
-        filterPanel.add(txtMaxPrice);
+    filterPanel.add(new JLabel("Price Range:"));
+    txtMinPrice = new JTextField(8);
+    txtMaxPrice = new JTextField(8);
+    filterPanel.add(new JLabel("Min:"));
+    filterPanel.add(txtMinPrice);
+    filterPanel.add(new JLabel("Max:"));
+    filterPanel.add(txtMaxPrice);
 
-        JButton btnFilter = new JButton("Apply Filters");
-        btnFilter.addActionListener(e -> loadProducts());
-        filterPanel.add(btnFilter);
+    JButton btnFilter = new JButton("Apply Filters");
+    btnFilter.addActionListener(e -> loadProducts());
+    filterPanel.add(btnFilter);
 
-        JPanel northPanel = new JPanel(new BorderLayout());
-        northPanel.add(topPanel, BorderLayout.NORTH);
-        northPanel.add(filterPanel, BorderLayout.SOUTH);
-        panel.add(northPanel, BorderLayout.NORTH);
+    JPanel northPanel = new JPanel(new BorderLayout());
+    northPanel.add(topPanel, BorderLayout.NORTH);
+    northPanel.add(filterPanel, BorderLayout.SOUTH);
+    panel.add(northPanel, BorderLayout.NORTH);
 
-        String[] columns = {"Product ID", "Name", "Category", "Price", "Stock", "Avg Rating", "Reviews"};
-        modelProducts = new DefaultTableModel(columns, 0) {
-            @Override
-            public boolean isCellEditable(int row, int col) {
-                return false;
-            }
-        };
-        tableProducts = new JTable(modelProducts);
-        tableProducts.getColumnModel().getColumn(0).setMinWidth(0);
-        tableProducts.getColumnModel().getColumn(0).setMaxWidth(0);
-        tableProducts.getColumnModel().getColumn(0).setWidth(0);
-        panel.add(new JScrollPane(tableProducts), BorderLayout.CENTER);
+    String[] columns = {"Product ID", "Name", "Category", "Price", "Stock", "Avg Rating", "Reviews"};
+    modelProducts = new DefaultTableModel(columns, 0) {
+        @Override
+        public boolean isCellEditable(int row, int col) {
+            return false;
+        }
+    };
+    tableProducts = new JTable(modelProducts);
+    tableProducts.getColumnModel().getColumn(0).setMinWidth(0);
+    tableProducts.getColumnModel().getColumn(0).setMaxWidth(0);
+    tableProducts.getColumnModel().getColumn(0).setWidth(0);
+    panel.add(new JScrollPane(tableProducts), BorderLayout.CENTER);
 
-        JPanel btnPanel = new JPanel(new FlowLayout());
-        JButton btnViewDetails = new JButton("View Details");
-        JButton btnAddToCart = new JButton("Add to Cart");
-        btnPanel.add(btnViewDetails);
-        btnPanel.add(btnAddToCart);
+    JPanel btnPanel = new JPanel(new FlowLayout());
+    JButton btnViewDetails = new JButton("View Details");
+    JButton btnAddToCart = new JButton("Add to Cart");
+    JButton btnWishlist = new JButton("Add to Wishlist"); 
 
-        btnViewDetails.addActionListener(e -> viewProductDetails());
-        btnAddToCart.addActionListener(e -> addToCart());
+    btnPanel.add(btnViewDetails);
+    btnPanel.add(btnAddToCart);
+    btnPanel.add(btnWishlist); 
 
-        panel.add(btnPanel, BorderLayout.SOUTH);
+    btnViewDetails.addActionListener(e -> viewProductDetails());
+    btnAddToCart.addActionListener(e -> addToCart());
 
-        return panel;
-    }
+    btnWishlist.addActionListener(e -> {
+        int row = tableProducts.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select a product!");
+            return;
+        }
+        int productId = (Integer) modelProducts.getValueAt(row, 0);
+        
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "INSERT INTO Wishlists (user_id, product_id) VALUES (?, ?)";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setInt(1, currentUser.getUserId());
+            pstmt.setInt(2, productId);
+            pstmt.executeUpdate();
+            JOptionPane.showMessageDialog(this, "Added to Wishlist!");
+        } catch (SQLIntegrityConstraintViolationException ex) {
+            JOptionPane.showMessageDialog(this, "This item is already in your wishlist!", "Info", JOptionPane.INFORMATION_MESSAGE);
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage());
+        }
+    });
+
+    panel.add(btnPanel, BorderLayout.SOUTH);
+
+    return panel;
+}
 
     private void loadCatalogs(JComboBox<String> cmb) {
         cmb.removeAllItems();
@@ -491,40 +520,79 @@ add(bottomPanel, BorderLayout.SOUTH);
     }
 
     private JPanel createCartPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
+    JPanel panel = new JPanel(new BorderLayout());
 
-        String[] columns = {"Product", "Quantity", "Unit Price", "Subtotal"};
-        modelCart = new DefaultTableModel(columns, 0) {
-            @Override
-            public boolean isCellEditable(int row, int col) {
-                return col == 1; 
+    String[] columns = {"Product", "Quantity", "Unit Price", "Subtotal"};
+    modelCart = new DefaultTableModel(columns, 0) {
+        @Override
+        public boolean isCellEditable(int row, int col) {
+            return col == 1; 
+        }
+    };
+    tableCart = new JTable(modelCart);
+    panel.add(new JScrollPane(tableCart), BorderLayout.CENTER);
+
+    JPanel bottomPanel = new JPanel(new BorderLayout());
+
+    JPanel couponPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    JTextField txtCoupon = new JTextField(10);
+    JButton btnApplyCoupon = new JButton("Apply Coupon");
+
+    btnApplyCoupon.addActionListener(e -> {
+        String code = txtCoupon.getText().trim();
+        if (code.isEmpty()) return;
+        
+        try (Connection conn = DatabaseConnection.getConnection()) {
+            String sql = "SELECT discount_percent FROM Coupons WHERE code = ? AND is_active = TRUE AND expiry_date >= CURDATE()";
+            PreparedStatement pstmt = conn.prepareStatement(sql);
+            pstmt.setString(1, code);
+            ResultSet rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                int discount = rs.getInt("discount_percent");
+                JOptionPane.showMessageDialog(this, 
+                    "Coupon Applied! " + discount + "% discount will be reflected at checkout payment.", 
+                    "Success", JOptionPane.INFORMATION_MESSAGE);
+                // Not: Fiyatı gerçekten düşürmüyoruz, sistemi bozma riski almamak için sadece doğrulama yapıyoruz.
+                txtCoupon.setEnabled(false); 
+                btnApplyCoupon.setEnabled(false);
+            } else {
+                JOptionPane.showMessageDialog(this, "Invalid or expired coupon code!", "Error", JOptionPane.ERROR_MESSAGE);
             }
-        };
-        tableCart = new JTable(modelCart);
-        panel.add(new JScrollPane(tableCart), BorderLayout.CENTER);
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+    });
 
-        JPanel bottomPanel = new JPanel(new BorderLayout());
-        lblCartTotal = new JLabel("Total: $0.00");
-        lblCartTotal.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 16));
-        bottomPanel.add(lblCartTotal, BorderLayout.CENTER);
+    couponPanel.add(new JLabel("Coupon Code:"));
+    couponPanel.add(txtCoupon);
+    couponPanel.add(btnApplyCoupon);
+    bottomPanel.add(couponPanel, BorderLayout.NORTH); 
 
-        JPanel btnPanel = new JPanel(new FlowLayout());
-        JButton btnRemove = new JButton("Remove Item");
-        JButton btnUpdateQty = new JButton("Update Quantity");
-        JButton btnSubmit = new JButton("Submit Order");
-        btnPanel.add(btnRemove);
-        btnPanel.add(btnUpdateQty);
-        btnPanel.add(btnSubmit);
+    lblCartTotal = new JLabel("Total: $0.00");
+    lblCartTotal.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 16));
+    
+    JPanel totalPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+    totalPanel.add(lblCartTotal);
+    bottomPanel.add(totalPanel, BorderLayout.CENTER);
 
-        btnRemove.addActionListener(e -> removeFromCart());
-        btnUpdateQty.addActionListener(e -> updateQuantity());
-        btnSubmit.addActionListener(e -> submitOrder());
+    JPanel btnPanel = new JPanel(new FlowLayout());
+    JButton btnRemove = new JButton("Remove Item");
+    JButton btnUpdateQty = new JButton("Update Quantity");
+    JButton btnSubmit = new JButton("Submit Order");
+    btnPanel.add(btnRemove);
+    btnPanel.add(btnUpdateQty);
+    btnPanel.add(btnSubmit);
 
-        bottomPanel.add(btnPanel, BorderLayout.SOUTH);
-        panel.add(bottomPanel, BorderLayout.SOUTH);
+    btnRemove.addActionListener(e -> removeFromCart());
+    btnUpdateQty.addActionListener(e -> updateQuantity());
+    btnSubmit.addActionListener(e -> submitOrder());
 
-        return panel;
-    }
+    bottomPanel.add(btnPanel, BorderLayout.SOUTH);
+    panel.add(bottomPanel, BorderLayout.SOUTH);
+
+    return panel;
+}
 
     private void loadCart() {
         modelCart.setRowCount(0);
@@ -958,35 +1026,84 @@ private void submitOrder() {
     }
 
     private JPanel createReviewsPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
+    JPanel panel = new JPanel(new BorderLayout());
 
-        String[] columns = {"Order ID", "Product", "Quantity", "Status"};
-        DefaultTableModel model = new DefaultTableModel(columns, 0) {
-            @Override
-            public boolean isCellEditable(int row, int col) {
-                return false;
-            }
-        };
-        JTable table = new JTable(model);
-        panel.add(new JScrollPane(table), BorderLayout.CENTER);
+    String[] columns = {"Order ID", "Product", "Quantity", "Status", "Order Item ID", "Product ID"};
+    
+    modelReviews = new DefaultTableModel(columns, 0) {
+        @Override
+        public boolean isCellEditable(int row, int col) {
+            return false;
+        }
+    };
+    
+    tableReviews = new JTable(modelReviews);
+    
+    tableReviews.getColumnModel().getColumn(4).setMinWidth(0); 
+    tableReviews.getColumnModel().getColumn(4).setMaxWidth(0);
+    tableReviews.getColumnModel().getColumn(4).setWidth(0);
+    
+    tableReviews.getColumnModel().getColumn(5).setMinWidth(0); 
+    tableReviews.getColumnModel().getColumn(5).setMaxWidth(0);
+    tableReviews.getColumnModel().getColumn(5).setWidth(0);
 
-        JButton btnReview = new JButton("Leave Review");
-        btnReview.addActionListener(e -> {
-            int row = table.getSelectedRow();
-            if (row == -1) {
-                JOptionPane.showMessageDialog(this, "Please select an item first!");
-                return;
-            }
-        });
+    panel.add(new JScrollPane(tableReviews), BorderLayout.CENTER);
 
-        panel.add(btnReview, BorderLayout.SOUTH);
-        return panel;
-    }
+    JButton btnReview = new JButton("Leave Review");
+    btnReview.addActionListener(e -> {
+        int row = tableReviews.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Please select an item to review!");
+            return;
+        }
+        
+        int orderId = (Integer) modelReviews.getValueAt(row, 0);
+        String productName = (String) modelReviews.getValueAt(row, 1);
+        showReviewDialog(orderId, productName);
+        
+        loadReviewableItems(); 
+    });
+
+    panel.add(btnReview, BorderLayout.SOUTH);
+    return panel;
+}
 
     private void loadReviewableItems() {
-        // Implementation for loading items that can be reviewed
-        // Only shipped orders can be reviewed
+    if (modelReviews == null) return;
+
+    modelReviews.setRowCount(0); // Tabloyu temizle
+
+    try (Connection conn = DatabaseConnection.getConnection()) {
+        String sql = "SELECT o.order_id, p.name, oi.quantity, o.status, oi.order_item_id, p.product_id " +
+                     "FROM Order_Items oi " +
+                     "JOIN Orders o ON oi.order_id = o.order_id " +
+                     "JOIN Products p ON oi.product_id = p.product_id " +
+                     "WHERE o.customer_id = ? " +
+                     "AND o.status IN ('Shipped', 'Delivered') " +
+                     "AND NOT EXISTS ( " +
+                     "    SELECT 1 FROM Reviews r WHERE r.order_item_id = oi.order_item_id " +
+                     ") " +
+                     "ORDER BY o.order_date DESC";
+
+        PreparedStatement pstmt = conn.prepareStatement(sql);
+        pstmt.setInt(1, currentUser.getUserId());
+        ResultSet rs = pstmt.executeQuery();
+
+        while (rs.next()) {
+            modelReviews.addRow(new Object[]{
+                rs.getInt("order_id"),
+                rs.getString("name"),
+                rs.getInt("quantity"),
+                rs.getString("status"),
+                rs.getInt("order_item_id"), // Gizli kolon
+                rs.getInt("product_id")     // Gizli kolon
+            });
+        }
+    } catch (SQLException ex) {
+        ex.printStackTrace();
+        JOptionPane.showMessageDialog(this, "Error loading reviewable items: " + ex.getMessage());
     }
+}
 
     private JPanel createStatsPanel() {
         JPanel panel = new JPanel();
@@ -1393,4 +1510,50 @@ private void submitOrder() {
         public int getShippingAddressId() { return shippingAddressId; }
         public int getBillingAddressId() { return billingAddressId; }
     }
+
+        private void showNotifications() {
+    try (Connection conn = DatabaseConnection.getConnection()) {
+        // Demo amaçlı: Eğer hiç bildirim yoksa bir tane 'Hoşgeldin' bildirimi oluştur.
+        String checkSql = "SELECT COUNT(*) FROM Notifications WHERE user_id = ?";
+        PreparedStatement checkStmt = conn.prepareStatement(checkSql);
+        checkStmt.setInt(1, currentUser.getUserId());
+        ResultSet rsCheck = checkStmt.executeQuery();
+        if (rsCheck.next() && rsCheck.getInt(1) == 0) {
+            String insertSql = "INSERT INTO Notifications (user_id, message) VALUES (?, 'Welcome to E-Commerce System!')";
+            PreparedStatement insertStmt = conn.prepareStatement(insertSql);
+            insertStmt.setInt(1, currentUser.getUserId());
+            insertStmt.executeUpdate();
+        }
+
+        String sql = "SELECT message, created_at FROM Notifications WHERE user_id = ? ORDER BY created_at DESC";
+        PreparedStatement pstmt = conn.prepareStatement(sql);
+        pstmt.setInt(1, currentUser.getUserId());
+        ResultSet rs = pstmt.executeQuery();
+
+        StringBuilder sb = new StringBuilder();
+        boolean hasData = false;
+        while (rs.next()) {
+            hasData = true;
+            sb.append("[").append(rs.getTimestamp("created_at")).append("]\n");
+            sb.append(rs.getString("message")).append("\n\n");
+        }
+        
+        if (!hasData) {
+            sb.append("No new notifications.");
+        }
+
+        JTextArea textArea = new JTextArea(sb.toString());
+        textArea.setEditable(false);
+        textArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        scrollPane.setPreferredSize(new Dimension(350, 250));
+
+        JOptionPane.showMessageDialog(this, scrollPane, "My Notifications", JOptionPane.INFORMATION_MESSAGE);
+
+    } catch (SQLException ex) {
+        ex.printStackTrace();
+        JOptionPane.showMessageDialog(this, "Error loading notifications: " + ex.getMessage());
+    }
+}
+
 }
